@@ -213,15 +213,15 @@ func TestCredentialLabel(t *testing.T) {
 	if got := credentialLabel(oauth, false, true); got != "user@example.com" {
 		t.Fatalf("oauth label = %q", got)
 	}
-	key := &clineOAuthStorage{APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaaaaa"}
+	key := &clineOAuthStorage{APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21"}
 	if got := credentialLabel(key, true, false); got != "API Key ····fa21" {
 		t.Fatalf("key label = %q", got)
 	}
 	override := &clineOAuthStorage{
-		Email: "user@example.com", APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaaaaa",
-		Metadata: map[string]any{"label": "NAS Key"},
+		Email: "user@example.com", APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21",
+		Metadata: map[string]any{"label": "Custom Key"},
 	}
-	if got := credentialLabel(override, true, false); got != "NAS Key" {
+	if got := credentialLabel(override, true, false); got != "Custom Key" {
 		t.Fatalf("explicit label must win, got %q", got)
 	}
 	if got := credentialLabel(nil, true, false); got != "Cline API Key" {
@@ -237,14 +237,14 @@ func TestCredentialFileName(t *testing.T) {
 	if got := credentialFileName(oauth); got != "cline-user@example.com.json" {
 		t.Fatalf("oauth file name = %q", got)
 	}
-	key := &clineOAuthStorage{APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaaaaa"}
+	key := &clineOAuthStorage{APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21"}
 	if got := credentialFileName(key); !isGreekKeySequenceName(got) && !strings.HasPrefix(got, "cline-key-") {
 		t.Fatalf("key file name = %q, want key sequence name", got)
 	}
 	// A key-only credential that learned its email keeps the key slug: two keys
 	// on one account must not collide on one file.
 	keyKnown := &clineOAuthStorage{
-		APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaaaaa",
+		APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21",
 		Email:  "user@example.com",
 	}
 	if got := credentialFileName(keyKnown); got == "cline-user@example.com.json" {
@@ -305,8 +305,8 @@ func TestKeyOnlyIdentityEnrichment(t *testing.T) {
 		t.Fatalf("lookup calls = %d, want 1 (cached)", calls)
 	}
 	// An explicit label still wins over the resolved email.
-	st.Metadata = map[string]any{"label": "NAS Key"}
-	if got := credentialLabel(&st, true, false); got != "NAS Key" {
+	st.Metadata = map[string]any{"label": "Custom Key"}
+	if got := credentialLabel(&st, true, false); got != "Custom Key" {
 		t.Fatalf("explicit label must win, got %q", got)
 	}
 
