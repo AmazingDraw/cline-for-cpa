@@ -29,14 +29,18 @@ import (
 // 4. Hardcoded baseline (`0.0.34`) as ultimate mechanical safety net.
 
 const (
-	githubReleasesURL  = "https://api.github.com/repos/cline/cline/releases?per_page=10"
-	npmRegistryBaseURL = "https://registry.npmjs.org"
 	versionCacheTTL    = 6 * time.Hour
 	versionHTTPTimeout = 5 * time.Second
 	versionCacheFile   = "cline-version-cache.json"
 
 	targetKeyDesktop = "desktop"
 	targetKeyCLI     = "cli"
+)
+
+// Overridable in tests (httptest) so version probes never hit the public internet.
+var (
+	githubReleasesURL  = "https://api.github.com/repos/cline/cline/releases?per_page=10"
+	npmRegistryBaseURL = "https://registry.npmjs.org"
 )
 
 type versionCacheEntry struct {
@@ -199,11 +203,18 @@ func refreshVersionInBackground(targetKey string) {
 	}
 }
 
+func versionProbeEndpoints() (github, npm string) {
+	versionMu.RLock()
+	defer versionMu.RUnlock()
+	return githubReleasesURL, npmRegistryBaseURL
+}
+
 func fetchLatestDesktopReleaseVersion() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), versionHTTPTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesURL, nil)
+	githubURL, _ := versionProbeEndpoints()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -245,7 +256,8 @@ func fetchLatestDesktopReleaseVersion() (string, error) {
 }
 
 func fetchLatestNpmVersion(pkgName string) (string, error) {
-	url := fmt.Sprintf("%s/%s", npmRegistryBaseURL, pkgName)
+	_, npmBase := versionProbeEndpoints()
+	url := fmt.Sprintf("%s/%s", npmBase, pkgName)
 	ctx, cancel := context.WithTimeout(context.Background(), versionHTTPTimeout)
 	defer cancel()
 

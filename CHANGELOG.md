@@ -3,6 +3,18 @@
 > 只记「改了什么 / 为什么」。机制长文、宿主源码坐标与验证命令在 [docs/](docs/)；
 > 现行用法见 [README](README.md)。版本号与产物一致，改代码必升号。
 
+## 0.3.22 补充 3（测试，不影响产物）｜ 补 errors / quota / version_updater 覆盖率
+
+审查方案 B′：三块近零覆盖文件补表驱动单元测试，不升 `PluginVersion`。
+
+- **`plugin/quota.go`**：identifier / describe / reset、`planToQuotaFetch` 窗口与状态、
+  httptest 拉取 plan/usage-limits、无凭证、API Key / OAuth 取额度、404 合成 Free Tier、
+  invalid_grant 重授权。
+- **`plugin/errors.go`**：补齐 envelope 构造、stall 边沿、传输错误分型、OAuth 401 分型、
+  本地 failure 构造器。
+- **`plugin/version_updater.go`**：GitHub / npm URL 改为可在测试里指向 `httptest`
+  （默认值不变），覆盖桌面 tag、npm fallback、磁盘快照垃圾过滤、`StartVersionUpdater`。
+
 ## 0.3.22 补充 2（工具链，不影响产物）｜ linux 部署端部署后自动收敛历史备份
 
 - **`build` (linux native) 末尾新增 `prune_superseded_backups`**：
