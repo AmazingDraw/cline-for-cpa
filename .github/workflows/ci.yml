@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: vet / race / gofmt / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Install cgo toolchain
+        # The plugin is a CGO c-shared library, so `go build -buildmode=c-shared`
+        # below needs a C compiler. gcc ships with the runner image; this step
+        # exists so a future image change fails loudly here instead of midway
+        # through the build step.
+        run: gcc --version
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l . | grep -v '^$' || true)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt required on:"; echo "$unformatted"
+            gofmt -d $unformatted
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test -race ./...
+
+      - name: build (linux/amd64 c-shared)
+        run: bash -c 'CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -buildmode=c-shared -o /tmp/probe.so .'
+
+  modelmeta-drift:
+    name: model metadata drift
+    # Needs a live Cline bearer, so it cannot gate a PR. It runs on a schedule and
+    # on demand: the whole point of `tools/modelmeta --check` is to catch the
+    # upstream silently changing a context window or a max_completion_tokens
+    # between releases, which is a scheduled-discovery problem, not a per-commit
+    # one. Failing this job is a signal to run `go run ./tools/modelmeta`.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Check plugin/modelmeta_gen.go against upstream
+        env:
+          MODELMETA_TOKEN: ${{ secrets.CLINE_BEARER }}
+        run: |
+          if [ -z "$MODELMETA_TOKEN" ]; then
+            echo "::notice::CLINE_BEARER secret not set; skipping drift check"
+            exit 0
+          fi
+          go run ./tools/modelmeta --check -token "$MODELMETA_TOKEN"
