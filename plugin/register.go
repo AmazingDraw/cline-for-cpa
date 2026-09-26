@@ -101,7 +101,7 @@ func registration() map[string]any {
 			"Name":             PluginTitle,
 			"Version":          PluginVersion,
 			"Author":           "ShuaiHui",
-			"GitHubRepository": "https://github.com/ShuaiHui/cline-for-cpa",
+			"GitHubRepository": "https://github.com/AmazingDraw/cline-for-cpa",
 			"Logo":             PluginLogo,
 			"ConfigFields": []map[string]any{
 				{
