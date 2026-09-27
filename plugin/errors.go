@@ -511,7 +511,7 @@ func detailSuffix(body string) string {
 func missingCredentialsFailure() failure {
 	return failure{
 		status:    http.StatusUnauthorized,
-		message:   "缺少 Cline 凭证：请在管理面板登录 Cline，或在插件配置填写 api_keys。",
+		message:   "缺少 Cline 登录凭证：请在管理面板登录 Cline（本版本只走 OAuth，不再使用 API Key）。",
 		code:      "missing_credentials",
 		retryable: retryablePtr(false),
 	}

@@ -159,14 +159,6 @@ func reloadStorageFromDisk(cfg pluginConfig, st *clineOAuthStorage) *clineOAuthS
 	if st.Email != "" {
 		name = clineAuthFileName(st.Email)
 	}
-	// Key-only credentials have no email to name their file after, but they do
-	// have a canonical slug: the Greek-sequence name the config sync assigns.
-	// Without this branch a trimmed key record was unrecoverable from disk,
-	// which is also why a disabled flag set on disk never reached a record the
-	// host had handed over without it.
-	if name == "" && strings.TrimSpace(st.APIKey) != "" {
-		name = keyAuthFileNameForDir(dir, st.APIKey)
-	}
 	if name == "" {
 		return st
 	}
@@ -179,13 +171,7 @@ func reloadStorageFromDisk(cfg pluginConfig, st *clineOAuthStorage) *clineOAuthS
 		return st
 	}
 	if strings.TrimSpace(onDisk.RefreshToken) == "" && strings.TrimSpace(onDisk.AccessToken) == "" {
-		// A key-only file carries neither token, so the token-based "is there
-		// anything worth repairing" guard would reject exactly the record this
-		// branch exists to recover. Accept it when the disk copy holds a key
-		// that matches the one we were handed.
-		if strings.TrimSpace(onDisk.APIKey) == "" || strings.TrimSpace(onDisk.APIKey) != strings.TrimSpace(st.APIKey) {
-			return st
-		}
+		return st
 	}
 	return &onDisk
 }

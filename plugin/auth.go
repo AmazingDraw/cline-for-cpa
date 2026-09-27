@@ -20,23 +20,17 @@ func handleAuthParse(request []byte) ([]byte, error) {
 	if !strings.EqualFold(strings.TrimSpace(stored.Type), ProviderKey) {
 		return okEnvelope(map[string]any{"Handled": false})
 	}
-	hasKey := strings.TrimSpace(stored.APIKey) != ""
 	hasOAuth := strings.TrimSpace(stored.RefreshToken) != "" || strings.TrimSpace(stored.AccessToken) != ""
-	if !hasKey && !hasOAuth {
-		return okEnvelope(map[string]any{"Handled": false})
-	}
-	label := credentialLabel(&stored, hasKey, hasOAuth)
 	fileName := authParseFileName(request)
 	if fileName == "" {
 		fileName = credentialFileName(&stored)
 	}
-
-	// Anti-pollution: a key file (cline-key-*.json) must never be treated as OAuth,
-	// even if stale/corrupted OAuth tokens exist in its JSON.
-	isKeyFile := strings.HasPrefix(fileName, "cline-key-")
-	if isKeyFile {
-		hasOAuth = false
+	// 0.4.0: API keys are out. Key files and key-only JSON are not this plugin's
+	// credentials — the host must not route them into the executor.
+	if strings.HasPrefix(fileName, "cline-key-") || !hasOAuth {
+		return okEnvelope(map[string]any{"Handled": false})
 	}
+	label := credentialLabel(&stored, false, hasOAuth)
 
 	meta := map[string]any{
 		"type": ProviderKey,
@@ -47,22 +41,15 @@ func handleAuthParse(request []byte) ([]byte, error) {
 	if l := strings.TrimSpace(label); l != "" {
 		meta["label"] = l
 	}
-	if hasKey {
-		meta["api_key"] = stored.APIKey
-	}
-	if hasOAuth && !isKeyFile {
-		meta["access_token"] = withWorkOSPrefix(stored.AccessToken)
-		meta["refresh_token"] = stored.RefreshToken
-		meta["expires_at"] = stored.ExpiresAt
-		meta["account_id"] = stored.AccountID
-	}
+	meta["access_token"] = withWorkOSPrefix(stored.AccessToken)
+	meta["refresh_token"] = stored.RefreshToken
+	meta["expires_at"] = stored.ExpiresAt
+	meta["account_id"] = stored.AccountID
 	for k, v := range stored.Metadata {
+		if k == "api_key" || k == "managed_by" {
+			continue
+		}
 		meta[k] = v
-	}
-	if isKeyFile {
-		delete(meta, "access_token")
-		delete(meta, "refresh_token")
-		delete(meta, "expires_at")
 	}
 	// Publish the host refresh contract on load, not only after the first
 	// refresh: the schedule has to exist from the moment the auth file is read,

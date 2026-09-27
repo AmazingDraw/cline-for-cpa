@@ -24,8 +24,7 @@ plugins:
     cline-for-cpa:
       enabled: true
       base_url: https://api.cline.bot/api/v1
-      # api_key optional: panel Cline OAuth (device flow) writes an auth file
-      # api_key: sk_...        # fallback only when OAuth is fully unavailable (warns)
+      # OAuth only: log in via the management panel. API keys are ignored.
       refresh_interval_seconds: 600   # host refresh contract; missing → periodic 503
 ```
 
@@ -103,8 +102,8 @@ Fields under `plugins.configs.cline-for-cpa` (source of truth: `plugin/config.go
 
 | Field | Default | Notes |
 | :-- | :-- | :-- |
-| `credential_preference` | `oauth_first` | `oauth_first` / `key_first` / `round_robin` |
-| `api_key` | — | Config key; plugin may auto-manage `auths/cline-key-<last4>.json` |
+| `credential_preference` | `oauth_first` | Enum kept for old YAML; API keys are ignored |
+| ~~`api_key`~~ | — | Removed in 0.4.0 |
 | `base_url` | `https://api.cline.bot/api/v1` | Upstream base |
 | `auth_dir` | `~/.cli-proxy-api/auths` | Auth dir for refresh lock / re-read under lock |
 | `share_desktop_store` | `false` | Also contend for official `providers.json.oauth-*.lock` |
@@ -179,11 +178,9 @@ Cline rotates `refreshToken` on every refresh
 
 Practical rule: **one hot endpoint** holds the live OAuth auth file and refreshes; other machines use key-only (or stay disabled) if they must not compete.
 
-Credential preference for the selected auth entry: file **OAuth** → keep current token briefly if OAuth is transiently down but not expired → fall back to configured `api_key` (metered; warns).
+OAuth only. Transient refresh failure keeps the current token if it is still valid. API keys are not used.
 
-`invalid_grant` / `invalid_token` / `unauthorized` are the **only** cases that require re-authorization (`cline_reauth_required`). Re-login via the panel — do not rotate the API key for those.
-
-Key-only can still resolve account identity: `GET /users/me` works with `sk_…` and returns email; the plugin caches when possible. Quota panel works the same way.
+`invalid_grant` / `invalid_token` / `unauthorized` are the **only** cases that require re-authorization (`cline_reauth_required`). Re-login via the panel.
 
 ---
 

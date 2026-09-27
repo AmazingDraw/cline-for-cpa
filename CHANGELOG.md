@@ -3,84 +3,12 @@
 > 只记「改了什么 / 为什么」。机制长文、宿主源码坐标与验证命令在 [docs/](docs/)；
 > 现行用法见 [README](README.md)。版本号与产物一致，改代码必升号。
 
-## 0.3.25 — 2026-09-27 ｜ 修 0.3.24 升级后「缺凭证」与面板表单拦 key
+## 0.4.0 — 2026-09-27 ｜ oauth-only：放弃 API Key，只走登录凭证
 
-0.3.24 拆掉 config key 运行时兜底是对的，但把两条预先存在的缝暴露成了全面 401。
+从 **0.3.23**（治理改坏之前的最后一版）另开分支，不把 0.3.24/0.3.25 的治理补丁叠上去。
 
-- **execute 读不到宿主交来的凭证**：宿主 `pluginapi.ExecutorRequest` 无 JSON tag，
-  线上是 PascalCase `StorageJSON`。`json:"storage_json"` 对不上（下划线过不了
-  大小写折叠），OAuth 文件和 `cline-key-monochord.json` 都交过来了，插件却当成空。
-  以前靠 config 兜底「碰巧能打」；兜底一拆，16ms 全员 `missing_credentials`。
-  现与 quota/auth 对齐，PascalCase / snake_case 都认。
-- **面板填 key 报「请先修复插件配置表单错误」**：`api_keys` 注册成 `type: array` 后，
-  管理中心把控件当成 JSON textarea，粘贴原始 key 或描述里的单引号 `['sk-1']`
-  都过不了 `JSON.parse`。改为 `type: string`，加载时同时接受数组、单个 key、
-  换行列表、JSON 数组字符串。
-
-## 0.3.24 — 2026-09-27 ｜ Key 凭证治理：开关生效、增删同步、面板入口统一
-
-治理方案（报告见 `~/Desktop/cline-for-cpa-Key凭证治理方案-20260926.md`）落地。
-原则一句话：**config 负责播种，宿主负责路由，插件只负责执行；
-插件永远不使用宿主没有交给它的凭证。**
-
-### ① 开关生效（拆掉私有兑底）
-
-- **`fallbackAPIKey` 不再回落 config key（`plugin/oauth.go`）**：
-  key 只来自宿主交来的凭证本身。原先 OAuth 失败时会静默掏出 config 里的
-  `api_key` 继续打 —— 恰是插件自己在调用点注释里立誓绝不做的事
-  （"a silent switch into the billing pool"）。现在 OAuth 失败 → 干净报错。
-- **`quota.go` 同步拆兑底**：无凭证时 `quota_fetch_failed`，绝不静默借用。
-- **插件现在能看见 disabled 并拒绝执行**：`clineOAuthStorage` 新增 `Disabled`；
-  检查位于磁盘修复**之后**（宿主交来的精简凭证由文件补全后依然能被拦住）。
-- **磁盘修复补齐 `Disabled` 字段**（`plugin/oauth_refresh_lock.go` + `plugin/oauth.go`）：
-  `reloadStorageFromDisk` 原先只按 email 找文件，**纯 key 凭证（无 email）的
-  磁盘记录永远修不回来**；补上希腊序名称分支，`withDiskFallback` 的
-  逐字段合并表也补入 `Disabled` —— 这是「加字段必须同步改合并表」的活例。
-
-### ② 增删同步（所有权采纳）
-
-- **采纳机制（`plugin/config.go`）**：无标记但 key 在配置里的 `cline-key-*.json`
-  自动补 `managed_by` 标记（只补标记，**绝不覆盖 disabled**）。
-  此前这类文件对回收逻辑不可见 —— 设置里删 key 后凭证文件原地活着、
-  仍可路由仍计费（孤儿态），却「看起来删成功了」。
-- **面板 key 入口统一**：注册字段删去单值 `api_key`，只保留 `api_keys` 数组；
-  旧配置中的 `api_key` 在加载时自动并入数组（去重、不丢 key、打迁移日志）。
-- **`resolveAPIKeys` 只认数组**；`CLINE_API_KEY` 环境变量通道彻底移除
-  （三端均未设置过此变量，纯死路）。
-
-### ③ 其它决策落地
-
-- **models_updater 改 OAuth 优先**（`plugin/models_updater.go`）：原先是 config key 优先，
-  意味着被面板关掉的 key 仍从这里打到 api.cline.bot。现改为凭证目录里的
-  OAuth token 优先、config key 兑底 —— 该调用是拉取模型目录元数据（控制面，
-  不产生推理计费），config key 仍是此处唯一可用的兑底，已注释固化
-  「控制面唯一例外」。
-- **Stream Guard 静默默认 60s → 120s**（`plugin/streamguard/guard.go`）：
-  态考模型（实证 glm-5.3-flash）生成中途常有超一分钟的停帧，旧默认会把
-  上游仍在生产的回合拦截掉；首帧 60s / 心跳 180s 不变。
-
-### 测试
-
-- 反转旧行为契约：`TestResolveCredentialsFallsBackToPluginAPIKeyWhenRefreshFails`
-  → `TestResolveCredentialsNeverFallsBackToConfigAPIKey`（同场景改断言报错且
-  bearer 不含 config key）。
-- 新增：无凭证→ErrNoCredentials、停用凭证被拒（含磁盘标志位）、采纳保全
-  disabled、托管件在 key 存活时不被篡改、删 key 同步回收、迁移去重、
-  models_updater OAuth 优先、quota 永不借用 config key。
-- `TestHandleQuotaFetchPlanError` 曾在旧写法下「错着过」（意外走到了无凭证
-  路径），已改回 storage_json 供给，重新覆盖它本来要测的 500 路径。
-
-## 0.3.24 补充（随版本一起构建）｜ 静态模型表跟随上游再漂移（发现上游振荡）
-
-- 按铁律重跑 `tools/modelmeta`：上游 6 行 `MaxOutputTokens` 相对 0.3.22 补充 3
-  修正后的值再次变化（deepseek-v4.1-flash 943718↔384000、glm-5.3 131072↔943717、
-  glm-5.3-flash 131072↔128000，free/pass/cloud 三层同步）。
-- **上游值在振荡**：01:06 会话逐条对账时为 943718/131072（当时 0 不一致），
-  18:00 再抓已翻回。这些值仅影响对外声明的元数据（不钳制请求、不会拒单），
-  但会让客户端对输出上限的认知来回摆动。
-- **暂不写入 pinnedMeta**：两侧值都曾是「上游真值」，钉哪边都是猜。
-  若继续振荡（例如一周内再翻一次），建议按振荡周期钉定或在展示层取并集，
-  届时再定。`--check` 已归零。
+- **不再使用 API Key**：不播种 `cline-key-*.json`，execute / quota / 模型目录 / auth.parse 都不把 key 当凭证。`CLINE_API_KEY` 与面板 `api_key`/`api_keys` 字段关闭。
+- **仍带上 0.3.23 就存在、被 key 兜底遮住的 ABI 缝**：execute 同时认宿主 PascalCase `StorageJSON`，否则纯 OAuth 也会 16ms 报缺凭证。
 
 ## 0.3.22 补充 3（测试，不影响产物）｜ 补 errors / quota / version_updater 覆盖率
 

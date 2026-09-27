@@ -54,15 +54,8 @@ func handleQuotaFetch(request []byte) ([]byte, error) {
 				return ErrorEnvelope("quota_fetch_failed", err.Error()), nil
 			}
 			bearer = oauthBearer(fresh)
-		} else if k := strings.TrimSpace(st.APIKey); k != "" {
-			bearer = k
 		}
 	}
-	// No plugin-level key fallback here: quota is a per-credential view, so the
-	// bearer must be the one that belongs to the credential the host handed
-	// over. resolveAPIKey(cfg) used to kick in here, which meant a card whose
-	// key was disabled in the panel still reported quota — sourced from the
-	// config key the toggle had just switched off.
 	if bearer == "" {
 		return ErrorEnvelope("quota_fetch_failed", "no credentials for quota fetch"), nil
 	}

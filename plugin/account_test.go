@@ -34,49 +34,25 @@ func TestIsPlausibleEmail(t *testing.T) {
 	}
 }
 
-func TestSyncConfigAPIKeyCredential(t *testing.T) {
+func TestSyncConfigAPIKeyCredentialDoesNotSeed(t *testing.T) {
 	dir := t.TempDir()
 	cfg := pluginConfig{
 		AuthDir: dir,
-		APIKeys: []string{"sk_test_12345678abcd"},
+		APIKey:  "sk_test_12345678abcd",
 	}
-
-	// 1. With APIKey set, credential file should be auto-created as Greek sequence name
 	syncConfigAPIKeyCredential(cfg)
 	targetFile := filepath.Join(dir, "cline-key-monochord.json")
-	raw, err := os.ReadFile(targetFile)
-	if err != nil {
-		t.Fatalf("expected %s to exist: %v", targetFile, err)
-	}
-
-	var data map[string]any
-	if err := json.Unmarshal(raw, &data); err != nil {
-		t.Fatalf("unmarshal generated auth: %v", err)
-	}
-	if data["type"] != "cline" || data["api_key"] != "sk_test_12345678abcd" {
-		t.Fatalf("unexpected content: %v", data)
-	}
-	meta, ok := data["metadata"].(map[string]any)
-	if !ok || meta["managed_by"] != configManagedKeyMarker {
-		t.Fatalf("expected managed_by marker, got: %v", data["metadata"])
-	}
-
-	// 2. When the key is cleared from the array, the config-managed file should be removed
-	cfg.APIKeys = nil
-	cfg.APIKey = ""
-	syncConfigAPIKeyCredential(cfg)
 	if _, err := os.Stat(targetFile); !os.IsNotExist(err) {
-		t.Fatalf("expected %s to be removed when APIKey cleared", targetFile)
+		t.Fatalf("oauth-only must not create %s", targetFile)
 	}
 
-	// 3. User manually created file without managed_by should NOT be removed
 	userFile := filepath.Join(dir, "cline-key-manual.json")
 	if err := os.WriteFile(userFile, []byte(`{"type":"cline","api_key":"manual"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	syncConfigAPIKeyCredential(cfg)
 	if _, err := os.Stat(userFile); err != nil {
-		t.Fatalf("expected user manual file to be preserved: %v", err)
+		t.Fatalf("leftover key file must be left on disk: %v", err)
 	}
 }
 
@@ -169,17 +145,17 @@ func TestHandleAuthParseCredentialPreference(t *testing.T) {
 	if err := json.Unmarshal(resKey, &envKey); err != nil {
 		t.Fatal(err)
 	}
-	if envKey.Result.Auth.Attributes["priority"] != "0" {
-		t.Fatalf("expected key priority 0 under oauth_first, got %v", envKey.Result.Auth.Attributes["priority"])
+	if envKey.Result.Handled {
+		t.Fatal("key-only files must not be handled in oauth-only mode")
 	}
 
-	// 2. key_first
+	// 2. key_first no longer promotes keys
 	activeConfig = defaultConfig()
 	activeConfig.CredentialPreference = "key_first"
 	resKey2, _ := handleAuthParse(rawKeyReq)
 	json.Unmarshal(resKey2, &envKey)
-	if envKey.Result.Auth.Attributes["priority"] != "1" {
-		t.Fatalf("expected key priority 1 under key_first, got %v", envKey.Result.Auth.Attributes["priority"])
+	if envKey.Result.Handled {
+		t.Fatal("key_first must not handle API key files")
 	}
 
 	// 3. round_robin

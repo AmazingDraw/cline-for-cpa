@@ -19,15 +19,11 @@ import (
 	"time"
 )
 
-// Defaults: first-frame 60s / silence 120s / heartbeat-only 180s.
+// Defaults: first-frame 60s / silence 60s / heartbeat-only 180s.
 // Long thinking is covered by heartbeat-only, not by inflating first-frame.
-// Silence was raised from 60s to 120s on 2026-09-27: reasoning models
-// (glm-5.3-flash was the live case) routinely pause well over a minute
-// mid-generation before the next frame, so the old default aborted turns the
-// upstream was still actively producing. An explicit config value still wins.
 const (
 	DefaultFirstFrame    = 60 * time.Second
-	DefaultSilence       = 120 * time.Second
+	DefaultSilence       = 60 * time.Second
 	DefaultHeartbeatOnly = 180 * time.Second
 )
 

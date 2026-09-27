@@ -1,12 +1,10 @@
 package plugin
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +16,7 @@ import (
 
 const (
 	defaultBaseURL = "https://api.cline.bot/api/v1"
+	envAPIKey      = "CLINE_API_KEY"
 	// defaultHTTPTimeoutSeconds mirrors the official DEFAULT_HTTP_TIMEOUT_MS
 	// (auth/cline.ts:45) — control-plane calls (token refresh, quota) are bounded
 	// exactly like the official client's. Streaming is not bounded by this: it
@@ -47,13 +46,13 @@ func httpTimeout(cfg pluginConfig) time.Duration {
 
 // pluginConfig is the plugins.configs.cline-for-cpa block (JSON or YAML-mapped JSON).
 type pluginConfig struct {
-	Enabled                           *bool      `yaml:"enabled" json:"enabled"`
-	APIKey                            string     `yaml:"api_key" json:"api_key"`
-	APIKeys                           apiKeyList `yaml:"api_keys" json:"api_keys"`
-	BaseURL                           string     `yaml:"base_url" json:"base_url"`
-	FirstFrameTimeoutSeconds          int        `yaml:"first_frame_timeout_seconds" json:"first_frame_timeout_seconds"`
-	StreamSilenceTimeoutSeconds       int        `yaml:"stream_silence_timeout_seconds" json:"stream_silence_timeout_seconds"`
-	StreamHeartbeatOnlyTimeoutSeconds int        `yaml:"stream_heartbeat_only_timeout_seconds" json:"stream_heartbeat_only_timeout_seconds"`
+	Enabled                           *bool    `yaml:"enabled" json:"enabled"`
+	APIKey                            string   `yaml:"api_key" json:"api_key"`
+	APIKeys                           []string `yaml:"api_keys" json:"api_keys"`
+	BaseURL                           string   `yaml:"base_url" json:"base_url"`
+	FirstFrameTimeoutSeconds          int      `yaml:"first_frame_timeout_seconds" json:"first_frame_timeout_seconds"`
+	StreamSilenceTimeoutSeconds       int      `yaml:"stream_silence_timeout_seconds" json:"stream_silence_timeout_seconds"`
+	StreamHeartbeatOnlyTimeoutSeconds int      `yaml:"stream_heartbeat_only_timeout_seconds" json:"stream_heartbeat_only_timeout_seconds"`
 
 	// Client identity sent upstream, aligned with the Cline desktop client.
 	// Configurable so a desktop version bump needs no rebuild.
@@ -128,82 +127,6 @@ type pluginConfig struct {
 	CredentialPreference string `yaml:"credential_preference" json:"credential_preference"`
 }
 
-// apiKeyList accepts the shapes operators actually type into the panel:
-// a YAML/JSON array, a single pasted key, newline-separated keys, or a JSON
-// array encoded as a string. The management UI's type=array widget JSON-parses
-// the textarea and rejects a raw key with "请先修复插件配置表单错误".
-type apiKeyList []string
-
-func (k *apiKeyList) UnmarshalJSON(data []byte) error {
-	data = bytes.TrimSpace(data)
-	if len(data) == 0 || string(data) == "null" {
-		*k = nil
-		return nil
-	}
-	if data[0] == '[' {
-		var arr []string
-		if err := json.Unmarshal(data, &arr); err != nil {
-			return err
-		}
-		*k = arr
-		return nil
-	}
-	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
-		return err
-	}
-	*k = parseAPIKeyListText(s)
-	return nil
-}
-
-func (k *apiKeyList) UnmarshalYAML(value *yaml.Node) error {
-	switch value.Kind {
-	case yaml.SequenceNode:
-		var arr []string
-		if err := value.Decode(&arr); err != nil {
-			return err
-		}
-		*k = arr
-		return nil
-	case yaml.ScalarNode, yaml.AliasNode:
-		var s string
-		if err := value.Decode(&s); err != nil {
-			return err
-		}
-		*k = parseAPIKeyListText(s)
-		return nil
-	case yaml.DocumentNode:
-		if len(value.Content) == 1 {
-			return k.UnmarshalYAML(value.Content[0])
-		}
-	}
-	return fmt.Errorf("api_keys: expected string or array")
-}
-
-func parseAPIKeyListText(s string) apiKeyList {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	if strings.HasPrefix(s, "[") {
-		var arr []string
-		if err := json.Unmarshal([]byte(s), &arr); err == nil {
-			return arr
-		}
-	}
-	if strings.ContainsAny(s, "\r\n") {
-		var out apiKeyList
-		for _, line := range strings.Split(s, "\n") {
-			line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-			if line != "" {
-				out = append(out, line)
-			}
-		}
-		return out
-	}
-	return apiKeyList{s}
-}
-
 var (
 	configMu     sync.RWMutex
 	activeConfig = defaultConfig()
@@ -258,23 +181,8 @@ func applyConfig(raw []byte) error {
 		if incoming.Enabled != nil {
 			cfg.Enabled = incoming.Enabled
 		}
-		// Legacy single-key field: the panel only exposes the api_keys array, so
-		// an api_key left in an old config.yaml must be folded into the array or
-		// it would linger as invisible-but-live configuration. Folding (not
-		// dropping) keeps existing deployments working with zero operator action;
-		// the merged list is what gets persisted as credential files and what
-		// resolveAPIKeys serves. The stale yaml line stays until the next panel
-		// save rewrites the block — harmless, since nothing reads it any more.
-		// This must run BEFORE the APIKeys copy below, or the merged list would
-		// never reach cfg.
 		if incoming.APIKey != "" {
-			merged := append([]string{}, incoming.APIKeys...)
-			if !slices.Contains(merged, strings.TrimSpace(incoming.APIKey)) {
-				merged = append(merged, incoming.APIKey)
-				logCredentialEvent(cfg, "migrated legacy config field api_key into api_keys (panel now exposes only the array)")
-			}
-			incoming.APIKeys = merged
-			incoming.APIKey = ""
+			cfg.APIKey = incoming.APIKey
 		}
 		if len(incoming.APIKeys) > 0 {
 			cfg.APIKeys = incoming.APIKeys
@@ -346,7 +254,7 @@ func applyConfig(raw []byte) error {
 	configMu.Lock()
 	activeConfig = cfg
 	configMu.Unlock()
-	syncConfigAPIKeyCredential(cfg)
+	syncAuthFilePriorities(cfg, clineAuthDir(cfg))
 	return nil
 }
 
@@ -356,13 +264,6 @@ func currentConfig() pluginConfig {
 	return activeConfig
 }
 
-// resolveAPIKeys returns the configured key list, deduped, in config order.
-//
-// The array is the single source: the panel exposes only api_keys, the legacy
-// api_key field is folded into it at load time (applyConfig), and the
-// CLINE_API_KEY environment channel was removed — a key that arrived through
-// either of those invisible paths used to linger as unmanageable configuration
-// that no panel toggle could reach.
 func resolveAPIKeys(cfg pluginConfig) []string {
 	seen := make(map[string]struct{})
 	var keys []string
@@ -379,65 +280,17 @@ func resolveAPIKeys(cfg pluginConfig) []string {
 	for _, k := range cfg.APIKeys {
 		add(k)
 	}
+	if cfg.APIKey != "" {
+		add(cfg.APIKey)
+	}
+	if env := os.Getenv(envAPIKey); env != "" {
+		add(env)
+	}
 	return keys
 }
 
 func resolveAPIKey(cfg pluginConfig) string {
-	keys := resolveAPIKeys(cfg)
-	if len(keys) > 0 {
-		return keys[0]
-	}
 	return ""
-}
-
-// adoptConfigManagedKeyFile adds the config-managed marker to an existing key
-// credential file, preserving every other field byte-for-byte (most
-// importantly a disabled toggle the operator set in the panel).
-//
-// Returns false when the file was already up to date or the write failed —
-// both are non-events for the caller, which only logs on success.
-func adoptConfigManagedKeyFile(path string, raw []byte, st *clineOAuthStorage) bool {
-	var doc map[string]any
-	if err := json.Unmarshal(raw, &doc); err != nil || doc == nil {
-		return false
-	}
-	meta, ok := doc["metadata"].(map[string]any)
-	if !ok {
-		meta = map[string]any{}
-		doc["metadata"] = meta
-	}
-	if existing, _ := meta["managed_by"].(string); existing == configManagedKeyMarker {
-		return false // already adopted (races / double scans)
-	}
-	meta["managed_by"] = configManagedKeyMarker
-	encoded, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return false
-	}
-	// Nothing changed except the marker: skip the write when serialisation
-	// round-trips to the original bytes, so a no-op sync cannot churn the file
-	// and trip the host's watcher.
-	var original map[string]any
-	_ = json.Unmarshal(raw, &original)
-	if sameJSON(original, doc) {
-		return false
-	}
-	if err := safeInPlaceWrite(path, encoded); err != nil {
-		return false
-	}
-	return true
-}
-
-// sameJSON compares two decoded documents structurally. marshal-then-compare
-// is the cheapest reliable way to ignore key ordering differences between the
-// on-disk map and the mutated copy.
-func sameJSON(a, b any) bool {
-	ae, err1 := json.Marshal(a)
-	be, err2 := json.Marshal(b)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	return string(ae) == string(be)
 }
 
 func streamGuardConfig(cfg pluginConfig) streamguard.Config {
@@ -468,140 +321,10 @@ func priorityForCredential(pref string, isOAuth bool) int {
 }
 
 func syncConfigAPIKeyCredential(cfg pluginConfig) {
-	dir := clineAuthDir(cfg)
-	if dir == "" {
-		return
-	}
-	// Migrate any legacy cline-key-<last4>.json to cline-key-<greek>.json
-	if migrated, err := migrateLegacyKeyFiles(dir); err == nil && len(migrated) > 0 {
-		for _, m := range migrated {
-			logCredentialEvent(cfg, "migrated legacy key credential: %s", m)
-		}
-	}
-
-	keys := resolveAPIKeys(cfg)
-	keySet := make(map[string]struct{}, len(keys))
-	for _, k := range keys {
-		keySet[k] = struct{}{}
-	}
-
-	// Reconcile existing cline-key-*.json files against the configured keys.
-	// Two rules, both ownership-driven:
-	//
-	//  1. A file marked as config-managed whose key is gone from the config is
-	//     removed — removing the key from the panel settings is what deletes the
-	//     credential file, so the two can never drift apart.
-	//
-	//  2. A file whose key IS configured but which carries no managed_by marker
-	//     is adopted: the marker is added and nothing else changes. These files
-	//     used to be created by earlier versions (or by the host on a panel
-	//     login) without the marker, which made them permanently invisible to
-	//     rule 1 — deleting such a key from the settings left the credential
-	//     file on disk, still routable, still billing: an orphan that looked
-	//     deleted. Adoption closes that gap. Only the marker is written; an
-	//     existing disabled=true must survive it, or adoption would silently
-	//     re-enable a key the operator switched off.
-	if entries, err := os.ReadDir(dir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasPrefix(e.Name(), "cline-key-") || !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			filePath := filepath.Join(dir, e.Name())
-			raw, err := os.ReadFile(filePath)
-			if err != nil {
-				continue
-			}
-			var st clineOAuthStorage
-			if json.Unmarshal(raw, &st) != nil {
-				continue
-			}
-			_, marked := st.Metadata["managed_by"].(string)
-			isManaged := marked && st.Metadata["managed_by"] == configManagedKeyMarker
-			_, keep := keySet[strings.TrimSpace(st.APIKey)]
-			switch {
-			case isManaged && !keep:
-				_ = os.Remove(filePath)
-				logCredentialEvent(cfg, "removed config-managed key credential %s (api_key cleared)", e.Name())
-			case !isManaged && keep && strings.TrimSpace(st.APIKey) != "":
-				if adoptConfigManagedKeyFile(filePath, raw, &st) {
-					logCredentialEvent(cfg, "adopted key credential %s into config management (marker added, state preserved)", e.Name())
-				}
-			}
-		}
-	}
-
-	priorityVal := priorityForCredential(cfg.CredentialPreference, false)
-
-	// Ensure each configured key has a managed file named cline-key-<greek>.json
-	for _, key := range keys {
-		targetName, err := assignGreekKeyFileName(dir, key)
-		if err != nil {
-			targetName = "cline-key-monochord.json"
-		}
-		targetPath := filepath.Join(dir, targetName)
-
-		if raw, err := os.ReadFile(targetPath); err == nil {
-			var existing map[string]any
-			if json.Unmarshal(raw, &existing) == nil && strings.TrimSpace(fmt.Sprint(existing["api_key"])) == key {
-				// Strip any accidental OAuth pollution and update priority
-				modified := false
-				if _, hasTok := existing["refresh_token"]; hasTok {
-					delete(existing, "refresh_token")
-					delete(existing, "access_token")
-					delete(existing, "expires_at")
-					modified = true
-				}
-				currentPri, _ := existing["priority"].(float64)
-				if int(currentPri) != priorityVal {
-					existing["priority"] = priorityVal
-					modified = true
-				}
-				// Keep the persisted refresh contract in sync with the effective
-				// config. This field used to be written once at creation time and
-				// never revisited, so a later `refresh_interval_seconds: 1200` in
-				// config.yaml left every existing key credential advertising the
-				// original 600 — the plugin reported one value and the file on
-				// disk another. B1: two sources of truth for one contract.
-				if want := int(hostRefreshInterval(cfg) / time.Second); want > 0 {
-					if cur, _ := existing["refresh_interval_seconds"].(float64); int(cur) != want {
-						existing["refresh_interval_seconds"] = want
-						modified = true
-					}
-				}
-				if modified {
-					if encoded, err := json.MarshalIndent(existing, "", "  "); err == nil {
-						_ = safeInPlaceWrite(targetPath, encoded)
-					}
-				}
-				continue
-			}
-		}
-
-		st := map[string]any{
-			"type":     ProviderKey,
-			"api_key":  key,
-			"disabled": false,
-			"priority": priorityVal,
-			"metadata": map[string]any{
-				"managed_by": configManagedKeyMarker,
-			},
-		}
-		// Publish the same contract the plugin reports at runtime. Writing the
-		// default constant here is what made the file disagree with the plugin
-		// the moment an operator set a non-default refresh_interval_seconds (B1).
-		if want := int(hostRefreshInterval(cfg) / time.Second); want > 0 {
-			st["refresh_interval_seconds"] = want
-		}
-		encoded, err := json.MarshalIndent(st, "", "  ")
-		if err != nil {
-			continue
-		}
-		if err := safeInPlaceWrite(targetPath, encoded); err == nil {
-			logCredentialEvent(cfg, "auto-generated key credential %s from config api_key", targetName)
-		}
-	}
-
-	syncAuthFilePriorities(cfg, dir)
+	// 0.4.0: keys are no longer seeded or recycled. Hygiene still strips
+	// leaked api_key fields from OAuth files so a leftover cline-key-*.json
+	// cannot pollute a login.
+	syncAuthFilePriorities(cfg, clineAuthDir(cfg))
 }
 
 func syncAuthFilePriorities(cfg pluginConfig, dir string) {

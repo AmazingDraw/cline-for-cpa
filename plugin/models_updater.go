@@ -146,22 +146,7 @@ func triggerModelsRefresh() {
 	}()
 
 	cfg := currentConfig()
-	// OAuth first, config key as the last resort. This is a control-plane call
-	// (model catalog metadata, never inference) so neither token costs money;
-	// the ordering matters for semantics, not billing: preferring the access
-	// token from an auth file keeps the panel's key toggle honest end to end —
-	// with the key-first order this job used, a key the operator had switched
-	// off was still the credential reaching api.cline.bot from here. The config
-	// key remains the only last resort because a background poll has no
-	// host-provided credential to use; if this ever grows into a second caller,
-	// re-evaluate rather than copying the exception.
-	//
-	// Known trade-off (accepted): if every OAuth token is dead and the key is
-	// disabled, catalog refresh stops until an auth is usable again.
 	token := firstAccessTokenFromDir(clineAuthDir(cfg))
-	if token == "" {
-		token = resolveAPIKey(cfg)
-	}
 
 	snap, err := fetchLiveModelsSnapshot(cfg.BaseURL, token)
 	if err != nil {
@@ -192,6 +177,10 @@ func firstAccessTokenFromDir(dir string) string {
 			AccessToken string `json:"access_token"`
 		}
 		if json.Unmarshal(raw, &doc) == nil && strings.TrimSpace(doc.AccessToken) != "" {
+			base := filepath.Base(m)
+			if strings.HasPrefix(base, "cline-key-") {
+				continue
+			}
 			return strings.TrimSpace(doc.AccessToken)
 		}
 	}
