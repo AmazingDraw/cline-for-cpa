@@ -234,8 +234,8 @@ func TestDefaultsMatchPlan(t *testing.T) {
 	if DefaultFirstFrame != 60*time.Second {
 		t.Fatalf("FirstFrame default=%s want 60s", DefaultFirstFrame)
 	}
-	if DefaultSilence != 60*time.Second {
-		t.Fatalf("Silence default=%s want 60s", DefaultSilence)
+	if DefaultSilence != 120*time.Second {
+		t.Fatalf("Silence default=%s want 120s", DefaultSilence)
 	}
 	if DefaultHeartbeatOnly != 180*time.Second {
 		t.Fatalf("HeartbeatOnly default=%s want 180s", DefaultHeartbeatOnly)

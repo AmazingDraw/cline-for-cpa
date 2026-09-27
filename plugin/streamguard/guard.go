@@ -19,11 +19,11 @@ import (
 	"time"
 )
 
-// Defaults: first-frame 60s / silence 60s / heartbeat-only 180s.
+// Defaults: first-frame 60s / silence 120s / heartbeat-only 180s.
 // Long thinking is covered by heartbeat-only, not by inflating first-frame.
 const (
 	DefaultFirstFrame    = 60 * time.Second
-	DefaultSilence       = 60 * time.Second
+	DefaultSilence       = 120 * time.Second
 	DefaultHeartbeatOnly = 180 * time.Second
 )
 

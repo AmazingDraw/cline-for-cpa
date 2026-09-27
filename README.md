@@ -53,7 +53,7 @@ go run ./tools/modelmeta --check
 | **Dual namespaces** | `cline-pass/*` counts toward subscription; `cline-free/*` uses the free pool; bare ids → pass (legacy clients) |
 | **Expose = blacklist** | Everything in those namespaces is exposed by default; hide via `plugin/models.go:excludedModels` |
 | **Per-model metadata** | Context / max output / modalities / params from `tools/modelmeta` static table |
-| **Stream Guard** | First frame 60s / silence 60s / heartbeat-only 180s; heartbeat & comment frames count as alive but not progress. Timeouts & transport failures use OpenAI-shaped `{error:{message,type,code,retryable}}` (streaming via `host.stream.close`) |
+| **Stream Guard** | First frame 60s / silence 120s / heartbeat-only 180s; heartbeat & comment frames count as alive but not progress. Timeouts & transport failures use OpenAI-shaped `{error:{message,type,code,retryable}}` (streaming via `host.stream.close`) |
 | **Non-streaming** | `stream:false` is rewritten to SSE upstream then aggregated to `chat.completion` (Cline rejects non-stream) |
 | **Refresh contract + 401 split** | Plugin advertises refresh lead so the host wakes it; new token still rejected → 401 reauth; cannot obtain new token → **503 retryable** (not permanently dead) |
 | **Official OAuth alignment** | Cross-process `flock` / single-flight / re-read under lock / anti-zombie / 30s grace / 5‑minute lead |
@@ -123,7 +123,7 @@ Fields under `plugins.configs.cline-for-cpa` (source of truth: `plugin/config.go
 | Field | Default | Notes |
 | :-- | :-- | :-- |
 | `first_frame_timeout_seconds` | `60` | Stream Guard first frame |
-| `stream_silence_timeout_seconds` | `60` | Silence between inbound frames |
+| `stream_silence_timeout_seconds` | `120` | Silence between inbound frames |
 | `stream_heartbeat_only_timeout_seconds` | `180` | Heartbeat-only ceiling (**not** retryable) |
 | `force_stream_upstream` | `true` | Non-stream client → stream upstream, then aggregate |
 | `reasoning_effort_normalize` | `true` | Fix/drop illegal `reasoning_effort` (unknown values → empty content upstream) |
