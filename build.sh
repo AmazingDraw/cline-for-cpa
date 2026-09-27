@@ -72,6 +72,9 @@ if [[ "${1:-}" == "--clean" ]]; then
 fi
 
 echo "building $OUT with $GO_BIN (GOOS=$OS GOARCH=$GOARCH)"
+echo "release fallbacks (do these when bumping the plugin, not live probes):"
+echo "  1. plugin/cline_headers.go  defaultClientVersion"
+echo "  2. go run ./tools/modelmeta && go run ./tools/modelmeta --check"
 CGO_ENABLED=1 GOOS="$OS" GOARCH="$GOARCH" "$GO_BIN" build -trimpath -buildmode=c-shared \
   -ldflags "-s -w -X cline-for-cpa/plugin.PluginVersion=${VERSION}" \
   -o "$OUT" .

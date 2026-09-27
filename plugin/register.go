@@ -23,6 +23,10 @@ const (
 // would let a PLUGIN_VERSION override produce a file named 9.9.9 that still
 // reports 0.3.20 to the host — the "silent lie" build.sh's own comment warns about.
 // The default below stays the single source of truth when the flag is absent.
+//
+// When bumping this for a release, also refresh static fallbacks:
+//   - plugin/cline_headers.go  defaultClientVersion  (desktop UA if live probe fails)
+//   - go run ./tools/modelmeta  → plugin/modelmeta_gen.go  (then --check)
 var PluginVersion = "0.4.1"
 
 // HandleMethod is the plugin ABI dispatcher (mirrors cursor-for-cpa plugin.HandleMethod).
