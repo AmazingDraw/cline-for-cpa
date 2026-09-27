@@ -8,6 +8,7 @@
 从 **0.3.23**（治理改坏之前的最后一版）另开分支，不把 0.3.24/0.3.25 的治理补丁叠上去。
 
 - **不再使用 API Key**：不播种 `cline-key-*.json`，execute / quota / 模型目录 / auth.parse 都不把 key 当凭证。`CLINE_API_KEY` 与面板 `api_key`/`api_keys` 字段关闭。
+- **面板不再出现 `credential_preference`**：只走 OAuth，调度 enum 从 ConfigFields 拿掉；yaml 里旧行仍能加载、不再生效。
 - **仍带上 0.3.23 就存在、被 key 兜底遮住的 ABI 缝**：execute 同时认宿主 PascalCase `StorageJSON`，否则纯 OAuth 也会 16ms 报缺凭证。
 
 ## 0.3.22 补充 3（测试，不影响产物）｜ 补 errors / quota / version_updater 覆盖率

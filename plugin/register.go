@@ -104,13 +104,6 @@ func registration() map[string]any {
 			"GitHubRepository": "https://github.com/AmazingDraw/cline-for-cpa",
 			"Logo":             PluginLogo,
 			"ConfigFields": []map[string]any{
-				{
-					"name":        "credential_preference",
-					"type":        "enum",
-					"enum_values": []string{"oauth_first", "key_first", "round_robin"},
-					"EnumValues":  []string{"oauth_first", "key_first", "round_robin"},
-					"description": "凭证调度（本版本只走 OAuth 登录）。enum 保留 oauth_first / key_first / round_robin 以免旧配置无法加载；API Key 通道已关闭",
-				},
 				{"name": "base_url", "type": "string", "description": "Upstream OpenAI-compatible base (default https://api.cline.bot/api/v1)"},
 				{"name": "refresh_interval_seconds", "type": "number", "description": "Host refresh contract: seconds before expiry the host is told to poll this auth (default 600, 0 disables). Without it the host never refreshes cline proactively and the token is left to expire"},
 				{"name": "first_frame_timeout_seconds", "type": "number", "description": fmt.Sprintf("First-frame timeout (default %d)", cfg.FirstFrameTimeoutSeconds)},

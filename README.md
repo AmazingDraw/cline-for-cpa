@@ -102,8 +102,6 @@ Fields under `plugins.configs.cline-for-cpa` (source of truth: `plugin/config.go
 
 | Field | Default | Notes |
 | :-- | :-- | :-- |
-| `credential_preference` | `oauth_first` | Enum kept for old YAML; API keys are ignored |
-| ~~`api_key`~~ | — | Removed in 0.4.0 |
 | `base_url` | `https://api.cline.bot/api/v1` | Upstream base |
 | `auth_dir` | `~/.cli-proxy-api/auths` | Auth dir for refresh lock / re-read under lock |
 | `share_desktop_store` | `false` | Also contend for official `providers.json.oauth-*.lock` |

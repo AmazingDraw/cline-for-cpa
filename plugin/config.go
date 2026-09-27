@@ -121,9 +121,8 @@ type pluginConfig struct {
 	// outright ("empty response content"), so this defaults to true.
 	ForceStreamUpstream *bool `yaml:"force_stream_upstream" json:"force_stream_upstream"`
 
-	// CredentialPreference sets the priority schedule between OAuth and Key
-	// credentials: "oauth_first" (default, OAuth priority=1, Key priority=0),
-	// "key_first" (Key priority=1, OAuth priority=0), or "round_robin" (both priority=0).
+	// CredentialPreference is ignored at runtime (oauth-only). Kept on the
+	// struct so leftover yaml `credential_preference:` still loads.
 	CredentialPreference string `yaml:"credential_preference" json:"credential_preference"`
 }
 
@@ -247,9 +246,6 @@ func applyConfig(raw []byte) error {
 		if incoming.ReasoningEffortNormalize != nil {
 			cfg.ReasoningEffortNormalize = incoming.ReasoningEffortNormalize
 		}
-		if incoming.CredentialPreference != "" {
-			cfg.CredentialPreference = strings.TrimSpace(incoming.CredentialPreference)
-		}
 	}
 	configMu.Lock()
 	activeConfig = cfg
@@ -303,18 +299,8 @@ func streamGuardConfig(cfg pluginConfig) streamguard.Config {
 
 const configManagedKeyMarker = "config_api_key"
 
-func priorityForCredential(pref string, isOAuth bool) int {
-	pref = strings.ToLower(strings.TrimSpace(pref))
-	if pref == "" {
-		pref = "oauth_first"
-	}
+func priorityForCredential(_ string, isOAuth bool) int {
 	if isOAuth {
-		if pref == "oauth_first" {
-			return 1
-		}
-		return 0
-	}
-	if pref == "key_first" {
 		return 1
 	}
 	return 0
