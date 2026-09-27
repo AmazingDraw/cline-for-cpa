@@ -38,7 +38,7 @@ func TestSyncConfigAPIKeyCredential(t *testing.T) {
 	dir := t.TempDir()
 	cfg := pluginConfig{
 		AuthDir: dir,
-		APIKey:  "sk_test_12345678abcd",
+		APIKeys: []string{"sk_test_12345678abcd"},
 	}
 
 	// 1. With APIKey set, credential file should be auto-created as Greek sequence name
@@ -61,7 +61,8 @@ func TestSyncConfigAPIKeyCredential(t *testing.T) {
 		t.Fatalf("expected managed_by marker, got: %v", data["metadata"])
 	}
 
-	// 2. When APIKey is cleared, config-managed file should be removed
+	// 2. When the key is cleared from the array, the config-managed file should be removed
+	cfg.APIKeys = nil
 	cfg.APIKey = ""
 	syncConfigAPIKeyCredential(cfg)
 	if _, err := os.Stat(targetFile); !os.IsNotExist(err) {

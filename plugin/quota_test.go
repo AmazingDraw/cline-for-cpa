@@ -222,7 +222,9 @@ func TestFetchClinePlanErrorPaths(t *testing.T) {
 }
 
 func TestHandleQuotaFetchNoCredentials(t *testing.T) {
-	t.Setenv("CLINE_API_KEY", "")
+	// The env channel was removed (keys now flow through the api_keys array
+	// only), and the config key is no longer a quota fallback — an empty
+	// request with no credential must fail instead of borrowing one.
 	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\napi_key: \"\"\n", t.TempDir()))
 	raw, err := handleQuotaFetch([]byte(`{}`))
 	if err != nil {
@@ -240,9 +242,15 @@ func TestHandleQuotaFetchNoCredentials(t *testing.T) {
 func TestHandleQuotaFetchAPIKeyHappyPath(t *testing.T) {
 	srv := newQuotaTestServer(t, http.StatusOK, true)
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\napi_key: sk_cfg\n", t.TempDir(), srv.URL))
+	// The key must arrive the way the host delivers it: as the credential's
+	// own storage, not borrowed from the config. The config deliberately keeps
+	// no key — if the code still had a config fallback, the next test would
+	// catch it; this one just has to prove the storage path works.
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
 
-	raw, err := handleQuotaFetch([]byte(`{}`))
+	storage, _ := json.Marshal(clineOAuthStorage{Type: ProviderKey, APIKey: "sk_cfg"})
+	req, _ := json.Marshal(map[string]any{"storage_json": storage})
+	raw, err := handleQuotaFetch(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +265,27 @@ func TestHandleQuotaFetchAPIKeyHappyPath(t *testing.T) {
 	sub := result["subscription"].(map[string]any)
 	if sub["tierId"] != "p1" {
 		t.Fatalf("subscription=%v", sub)
+	}
+}
+
+// A config key must never be borrowed for a credential-less quota request:
+// the card the operator switched off would otherwise keep reporting quota
+// sourced from the very key the toggle had just switched off.
+func TestHandleQuotaFetchNeverUsesConfigAPIKey(t *testing.T) {
+	srv := newQuotaTestServer(t, http.StatusOK, true)
+	defer srv.Close()
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\napi_key: sk_config_must_not_be_used\n", t.TempDir(), srv.URL))
+
+	raw, err := handleQuotaFetch([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := decodeEnvelope(t, raw)
+	if env.OK || env.Error == nil || env.Error.Code != "quota_fetch_failed" {
+		t.Fatalf("want quota_fetch_failed, got %s", raw)
+	}
+	if !strings.Contains(env.Error.Message, "no credentials") {
+		t.Fatalf("message=%q", env.Error.Message)
 	}
 }
 
@@ -312,9 +341,11 @@ func TestHandleQuotaFetchPlan404IsFreeTier(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"no plan"}`))
 	}))
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\napi_key: sk_free\n", t.TempDir(), srv.URL))
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
 
-	raw, err := handleQuotaFetch([]byte(`{}`))
+	storage, _ := json.Marshal(clineOAuthStorage{Type: ProviderKey, APIKey: "sk_free"})
+	req, _ := json.Marshal(map[string]any{"storage_json": storage})
+	raw, err := handleQuotaFetch(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,9 +369,14 @@ func TestHandleQuotaFetchPlanError(t *testing.T) {
 		_, _ = w.Write([]byte("nope"))
 	}))
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\napi_key: sk_x\n", t.TempDir(), srv.URL))
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
 
-	raw, err := handleQuotaFetch([]byte(`{}`))
+	// The credential comes from storage so this test exercises what it always
+	// meant to: the upstream 500 on the plan endpoint, not the missing-key
+	// path it accidentally drifted into when the config fallback was removed.
+	storage, _ := json.Marshal(clineOAuthStorage{Type: ProviderKey, APIKey: "sk_x"})
+	req, _ := json.Marshal(map[string]any{"storage_json": storage})
+	raw, err := handleQuotaFetch(req)
 	if err != nil {
 		t.Fatal(err)
 	}

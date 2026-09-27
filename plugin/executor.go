@@ -17,13 +17,27 @@ import (
 )
 
 type executorRequest struct {
-	Model          string         `json:"model"`
-	Payload        []byte         `json:"payload"` // host JSON-encodes []byte as base64
-	StorageJSON    []byte         `json:"storage_json"`
-	Metadata       map[string]any `json:"metadata"`
-	AuthMetadata   map[string]any `json:"auth_metadata"`
-	StreamID       string         `json:"stream_id"`
-	HostCallbackID string         `json:"host_callback_id"`
+	Model           string         `json:"model"`
+	Payload         []byte         `json:"payload"` // host JSON-encodes []byte as base64
+	StorageJSON     []byte         `json:"storage_json"`
+	StorageJSONCap  []byte         `json:"StorageJSON"`
+	Metadata        map[string]any `json:"metadata"`
+	AuthMetadata    map[string]any `json:"auth_metadata"`
+	AuthMetadataCap map[string]any `json:"AuthMetadata"`
+	StreamID        string         `json:"stream_id"`
+	HostCallbackID  string         `json:"host_callback_id"`
+}
+
+// normalizeCasing copies host ABI PascalCase fields the snake_case tags miss.
+// encoding/json matches "Model" to `json:"model"` case-insensitively, but
+// "StorageJSON" ≠ "storage_json" because the underscore survives folding.
+func (r *executorRequest) normalizeCasing() {
+	if len(r.StorageJSON) == 0 {
+		r.StorageJSON = r.StorageJSONCap
+	}
+	if r.AuthMetadata == nil {
+		r.AuthMetadata = r.AuthMetadataCap
+	}
 }
 
 // hostCaller is set by main via SetHostCaller so stream chunks can be emitted.
@@ -39,6 +53,7 @@ func handleExecute(request []byte, stream bool) ([]byte, error) {
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("decode executor request: %w", err)
 	}
+	req.normalizeCasing()
 	cfg := currentConfig()
 	cred, errCred := resolveCredentials(cfg, req)
 	if errCred != nil {

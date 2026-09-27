@@ -23,7 +23,7 @@ const (
 // would let a PLUGIN_VERSION override produce a file named 9.9.9 that still
 // reports 0.3.20 to the host — the "silent lie" build.sh's own comment warns about.
 // The default below stays the single source of truth when the flag is absent.
-var PluginVersion = "0.3.23"
+var PluginVersion = "0.3.25"
 
 // HandleMethod is the plugin ABI dispatcher (mirrors cursor-for-cpa plugin.HandleMethod).
 func HandleMethod(method string, request []byte) ([]byte, error) {
@@ -111,8 +111,7 @@ func registration() map[string]any {
 					"EnumValues":  []string{"oauth_first", "key_first", "round_robin"},
 					"description": "凭证调度偏好：默认 oauth_first（OAuth 优先，正常时 100% 独占，故障/限流才自动切到 API Key）；亦可选 key_first（API Key 优先）或 round_robin（同级轮询）",
 				},
-				{"name": "api_key", "type": "string", "description": "Cline API key（单个备用 Key，自动托管为 cline-key-monochord.json）"},
-				{"name": "api_keys", "type": "array", "description": "Cline API keys 列表（支持配置多个 Key，如 [sk-1, sk-2]，按希腊乐律 monochord, dichord... 顺序自动托管，无数量上限）"},
+				{"name": "api_keys", "type": "string", "description": "Cline API keys（唯一的 key 入口）。直接粘贴一个 key；多个用换行，或 JSON 数组 [\"sk-1\",\"sk-2\"]。加则播种凭证文件，删则回收。面板 type=array 会拦非 JSON 粘贴（提示「请先修复插件配置表单错误」），故以字符串接收。旧的单值 api_key 加载时自动并入"},
 				{"name": "base_url", "type": "string", "description": "Upstream OpenAI-compatible base (default https://api.cline.bot/api/v1)"},
 				{"name": "refresh_interval_seconds", "type": "number", "description": "Host refresh contract: seconds before expiry the host is told to poll this auth (default 600, 0 disables). Without it the host never refreshes cline proactively and the token is left to expire"},
 				{"name": "first_frame_timeout_seconds", "type": "number", "description": fmt.Sprintf("First-frame timeout (default %d)", cfg.FirstFrameTimeoutSeconds)},

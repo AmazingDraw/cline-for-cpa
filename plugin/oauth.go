@@ -119,14 +119,17 @@ func parseOAuthError(raw []byte) (code, message string) {
 
 // clineOAuthStorage is the auth-file JSON we own (not the desktop providers.json).
 type clineOAuthStorage struct {
-	Type         string         `json:"type"`
-	AccessToken  string         `json:"access_token"`
-	RefreshToken string         `json:"refresh_token"`
-	ExpiresAt    int64          `json:"expires_at"` // unix ms
-	Email        string         `json:"email,omitempty"`
-	AccountID    string         `json:"account_id,omitempty"`
-	APIKey       string         `json:"api_key,omitempty"` // fallback sk_ path
-	Metadata     map[string]any `json:"metadata,omitempty"`
+	Type         string `json:"type"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    int64  `json:"expires_at"` // unix ms
+	Email        string `json:"email,omitempty"`
+	AccountID    string `json:"account_id,omitempty"`
+	APIKey       string `json:"api_key,omitempty"` // fallback sk_ path
+	// Disabled mirrors the auth file's panel toggle. The executor refuses to
+	// run a disabled credential; see resolveCredentials.
+	Disabled bool           `json:"disabled,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 type clineRefreshResponse struct {
@@ -355,6 +358,15 @@ func withDiskFallback(cfg pluginConfig, st *clineOAuthStorage) *clineOAuthStorag
 	}
 	if merged.Type == "" {
 		merged.Type = ProviderKey
+	}
+	// The disabled flag must also be recoverable from disk: the host hands over
+	// trimmed records, and a toggle the operator set in the panel lives only in
+	// the file. The field list above is deliberately explicit (a blind map
+	// merge would resurrect fields the host intentionally omitted), so a new
+	// storage field has to be added here too — this line is easy to forget,
+	// which is exactly why the disabled-refusal test covers the disk-only case.
+	if !merged.Disabled && onDisk.Disabled {
+		merged.Disabled = true
 	}
 	return &merged
 }
@@ -814,6 +826,20 @@ func resolveCredentials(cfg pluginConfig, req executorRequest) (credential, erro
 	// otherwise an expired bearer is sent upstream and the turn ends in a 401 that
 	// the host can mistake for a dead subscription.
 	st = withDiskFallback(cfg, st)
+	// A credential the host marked disabled must never be executed. The check
+	// deliberately sits AFTER withDiskFallback: a trimmed record without the
+	// flag is repaired from disk, and the on-disk disabled=true must still
+	// stop it — checking before the repair would let exactly that record
+	// through. (Routing should already skip disabled credentials; this is the
+	// executor's last word before a bearer reaches the upstream, and for the
+	// per-use billing key channel "the panel toggle is a lie" is not an
+	// acceptable state.)
+	if st != nil && st.Disabled {
+		logThrottled(cfg, "disabled-credential:"+credentialKey(st), 5*time.Minute,
+			"credential is disabled (%s) — refusing to execute it",
+			firstNonEmpty(st.Email, st.APIKey, diskProviderID))
+		return credential{}, ErrNoCredentials
+	}
 	// A credential that cannot be refreshed while its bearer is already stale is
 	// the silent precursor of an upstream 401: warn (throttled) so the plugin side
 	// leaves a trace. This exact silence is what made the 2026-09-23 outage look
@@ -881,11 +907,21 @@ func forceRefreshCredential(cfg pluginConfig, cred credential) (credential, bool
 	return credential{bearer: b, source: "oauth", oauth: true, storage: fresh}, true
 }
 
+// fallbackAPIKey returns the key borne by the credential the host handed over,
+// and nothing else.
+//
+// It used to fall back to resolveAPIKey(cfg) — the plugin-level key from
+// config.yaml — which is what made the panel's enable toggle a lie: the host
+// could stop routing to a disabled key credential, but any OAuth hiccup sent
+// this function digging out the config key anyway, silently billing the
+// usage pool. That is exactly the switch the plugin's own comment at the
+// oauth.go call site swears must never happen ("a silent switch into the
+// billing pool is what this plugin must never do"). The config key now seeds
+// a credential file (see syncConfigAPIKeyCredential) and the host routes;
+// this function only reads what the host handed over.
 func fallbackAPIKey(st *clineOAuthStorage, cfg pluginConfig) string {
 	if st != nil {
-		if k := strings.TrimSpace(st.APIKey); k != "" {
-			return k
-		}
+		return strings.TrimSpace(st.APIKey)
 	}
-	return resolveAPIKey(cfg)
+	return ""
 }
