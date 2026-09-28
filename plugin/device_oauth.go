@@ -14,7 +14,6 @@ import (
 // Official Cline CLI/desktop WorkOS production client id
 // (sdk/packages/shared/src/runtime/cline-environment.ts).
 const (
-	workOSAPIBaseURL   = "https://api.workos.com"
 	workOSClientIDProd = "client_01K3A541FN8TA3EPPHTD2325AR"
 	workOSDeviceAuth   = "/user_management/authorize/device"
 	workOSAuthenticate = "/user_management/authenticate"
@@ -22,6 +21,10 @@ const (
 	deviceLoginTTL     = 10 * time.Minute
 	deviceGrantType    = "urn:ietf:params:oauth:grant-type:device_code"
 )
+
+// workOSAPIBaseURL is overridable in tests (httptest) so device login never
+// hits the public WorkOS API. Production default is unchanged.
+var workOSAPIBaseURL = "https://api.workos.com"
 
 type pendingDeviceLogin struct {
 	deviceCode          string

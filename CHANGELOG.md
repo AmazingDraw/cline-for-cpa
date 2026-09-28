@@ -2,6 +2,10 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.2 — 2026-09-28
+
+移除 OAuth-only 后无用的 API Key 路径：`resolveAPIKeys` / `apiKeyFromAuth`、希腊名 key 文件、key-only `auth.refresh` 回声与 `/users/me` 身份补全。残留 `api_key` yaml 字段仍可加载但不生效；auth 文件卫生仍会剥掉 OAuth 文件里误写的 `api_key`。
+
 ## 0.4.1 — 2026-09-27
 
 `stream_silence_timeout_seconds` 默认 60 → **120**。

@@ -30,7 +30,7 @@ func handleAuthParse(request []byte) ([]byte, error) {
 	if strings.HasPrefix(fileName, "cline-key-") || !hasOAuth {
 		return okEnvelope(map[string]any{"Handled": false})
 	}
-	label := credentialLabel(&stored, false, hasOAuth)
+	label := credentialLabel(&stored)
 
 	meta := map[string]any{
 		"type": ProviderKey,
@@ -135,62 +135,16 @@ const defaultAuthFileName = "cline.json"
 
 // credentialFileName is the file name handed to the host for a credential.
 //
-// The name is a path and the card subtitle, and it is what moves when a
-// credential is copied between machines, so it is derived from the credential
-// itself and never from the display label:
-//
-//	OAuth (has refresh/access token)  → cline-<email>.json  (historical, stable)
-//	key-only                          → cline-key-<last4>.json
-//	no identity at all                → cline.json
-//
-// The kind decides, not the email: a key-only credential learns its email from
-// Cline (GET /users/me) but must keep the key slug — two keys on one account
-// would otherwise collide on the same file.
+// OAuth-only (0.4+): derived from the account email when known, otherwise the
+// generic plugin-scoped default. Key-era cline-key-* naming is gone.
 func credentialFileName(st *clineOAuthStorage) string {
 	if st == nil {
 		return defaultAuthFileName
 	}
-	key := strings.TrimSpace(st.APIKey)
-	oauth := strings.TrimSpace(st.RefreshToken) != "" || strings.TrimSpace(st.AccessToken) != ""
-	email := strings.TrimSpace(st.Email)
-
-	// An APIKey credential always resolves to its key slug
-	if key != "" {
-		return keyAuthFileName(key)
-	}
-	if oauth && email != "" {
-		return clineAuthFileName(email)
-	}
-	if email != "" {
+	if email := strings.TrimSpace(st.Email); email != "" {
 		return clineAuthFileName(email)
 	}
 	return defaultAuthFileName
-}
-
-// keyAuthFileName returns the canonical greek musical sequence file name for an API key.
-//
-// Read-only by contract: this sits on the auth.parse / auth.refresh path the
-// host polls every 30s per credential, so it resolves the name and nothing else.
-// Moving a legacy file is migrateLegacyKeyFiles' job, at config-apply time.
-func keyAuthFileName(key string) string {
-	dir := clineAuthDir(currentConfig())
-	if dir != "" && isDirectory(dir) {
-		name, err := resolveGreekKeyFileName(dir, key)
-		if err == nil && name != "" {
-			return name
-		}
-	}
-	return "cline-key-" + lastN(key, 4) + ".json"
-}
-
-func keyAuthFileNameForDir(authDir, key string) string {
-	if authDir != "" && isDirectory(authDir) {
-		name, err := resolveGreekKeyFileName(authDir, key)
-		if err == nil && name != "" {
-			return name
-		}
-	}
-	return "cline-key-" + lastN(key, 4) + ".json"
 }
 
 func authParseFileName(request []byte) string {
@@ -209,27 +163,11 @@ func authParseFileName(request []byte) string {
 	return probe.Name
 }
 
-// credentialLabel decides the management-panel card title.
+// credentialLabel decides the management-panel card title (OAuth-only).
 //
-// Host rule (CLIProxyAPI internal/pluginhost/auth_provider.go:
-// pluginAuthDataToCoreAuth): the card title is exactly AuthData.Label and the
-// subtitle is AuthData.FileName. When no plugin claims a file, the host falls
-// back to the file name with the "<provider>-" prefix stripped (which is why an
-// unclaimed cline-nas-key.json shows as "nas-key"). So the title must carry the
-// *identity*: the panel already renders "Cline" as the provider chip, and
-// repeating the provider there wastes the one line that tells several accounts
-// apart.
-//
-// Resolution order:
-//
-//  1. an explicit `label` in the credential metadata — a user override wins;
-//  2. the account email (OAuth);
-//  3. "API Key ····<last 4>" for key-only auths, so two keys never look alike;
-//  4. the tier fallback.
-//
-// The subtitle stays the real file name: it is the routing identity users see in
-// auth-files/config paths, so it is never prettified.
-func credentialLabel(st *clineOAuthStorage, hasKey, hasOAuth bool) string {
+// Host rule: card title is AuthData.Label; subtitle is AuthData.FileName.
+// Resolution: metadata label override → email → "Cline OAuth".
+func credentialLabel(st *clineOAuthStorage) string {
 	if st != nil {
 		if l := stringFromMap(st.Metadata, "label", "Label", "display_name", "displayName"); l != "" {
 			return l
@@ -237,30 +175,8 @@ func credentialLabel(st *clineOAuthStorage, hasKey, hasOAuth bool) string {
 		if e := strings.TrimSpace(st.Email); e != "" {
 			return e
 		}
-		if k := strings.TrimSpace(st.APIKey); k != "" {
-			return "API Key ····" + lastN(k, 4)
-		}
 	}
-	switch {
-	case hasOAuth:
-		return "Cline OAuth"
-	case hasKey:
-		return "Cline API Key"
-	default:
-		return "Cline OAuth"
-	}
-}
-
-// lastN returns the last n runes of s (shorter strings are returned whole).
-func lastN(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	r := []rune(strings.TrimSpace(s))
-	if len(r) <= n {
-		return string(r)
-	}
-	return string(r[len(r)-n:])
+	return "Cline OAuth"
 }
 
 func handleAuthRefresh(request []byte) ([]byte, error) {
@@ -274,71 +190,18 @@ func handleAuthRefresh(request []byte) ([]byte, error) {
 	}
 	cfg := currentConfig()
 	requestAuthID := extractRequestAuthID(request)
-	isKeyFile := strings.HasPrefix(requestAuthID, "cline-key-")
 
 	// The host may have handed us a trimmed record (e.g. without expires_at).
 	// Repair it from the auth file first: a missing expiry would otherwise make
 	// every downstream freshness decision guesswork.
-	if !isKeyFile {
-		if repaired := withDiskFallback(cfg, &stored); repaired != nil {
-			stored = *repaired
-		}
+	if repaired := withDiskFallback(cfg, &stored); repaired != nil {
+		stored = *repaired
 	}
-	if strings.TrimSpace(stored.RefreshToken) == "" || isKeyFile {
-		// API-key-only auth: nothing to refresh. Ask Cline which account the key
-		// belongs to (best effort) so the panel card can show the account instead
-		// of a key hint, then echo the credential back.
-		stored = enrichKeyOnlyIdentity(cfg, stored)
-		label := credentialLabel(&stored, true, false)
-		fileName := requestAuthID
-		if fileName == "" {
-			fileName = authParseFileName(request)
-		}
-		if fileName == "" {
-			fileName = credentialFileName(&stored)
-		}
-		priorityVal := priorityForCredential(cfg.CredentialPreference, false)
-		meta := map[string]any{
-			"type":     ProviderKey,
-			"api_key":  stored.APIKey,
-			"priority": priorityVal,
-		}
-		if stored.Email != "" {
-			meta["email"] = stored.Email
-			if stored.AccountID != "" {
-				meta["account_id"] = stored.AccountID
-			}
-		} else {
-			meta["key_hint"] = "····" + lastN(stored.APIKey, 4)
-		}
-		attrs := extractRequestAttributes(request)
-		attrs["priority"] = fmt.Sprintf("%d", priorityVal)
-		if strings.TrimSpace(attrs["path"]) == "" {
-			if p := authFilePath(cfg, &stored); p != "" {
-				attrs["path"] = p
-				attrs["source"] = p
-				attrs["source_backend"] = "file"
-			}
-		}
-		// An unresolved identity comes back soon instead of in a day: the lookup
-		// may have failed transiently, and the card stays generic until it works.
-		next := time.Now().Add(resolvedKeyRefresh)
-		if stored.Email == "" {
-			next = time.Now().Add(unresolvedKeyRetry)
-		}
-		auth := map[string]any{
-			"Provider":    ProviderKey,
-			"ID":          fileName,
-			"FileName":    fileName,
-			"Label":       label,
-			"StorageJSON": raw,
-			"Metadata":    meta,
-			"Attributes":  attrs,
-		}
-		return okEnvelope(map[string]any{
-			"Auth":             auth,
-			"NextRefreshAfter": next.UTC().Format(time.RFC3339),
-		})
+	// 0.4.2: API Key credentials are unsupported. Refuse key files and
+	// refresh-token-less storage instead of echoing a key-only card.
+	if strings.HasPrefix(requestAuthID, "cline-key-") || strings.TrimSpace(stored.RefreshToken) == "" {
+		return ErrorEnvelope("unsupported_credential",
+			"cline-for-cpa 仅支持 OAuth 登录，请在管理面板重新登录 Cline（API Key 已废弃）。"), nil
 	}
 	// Same path as request-time refresh: single-flight + cross-process lock +
 	// re-read, so the scheduled refresh never races a CLI/hub rotation.
@@ -389,14 +252,11 @@ func handleAuthRefresh(request []byte) ([]byte, error) {
 	if fresh.AccountID == "" {
 		fresh.AccountID = stored.AccountID
 	}
-	if fresh.APIKey == "" {
-		fresh.APIKey = stored.APIKey
-	}
 	out, err := json.Marshal(fresh)
 	if err != nil {
 		return ErrorEnvelope("refresh_failed", err.Error()), nil
 	}
-	label := credentialLabel(fresh, false, true)
+	label := credentialLabel(fresh)
 	fileName := extractRequestAuthID(request)
 	if fileName == "" {
 		fileName = authParseFileName(request)

@@ -21,9 +21,7 @@ import (
 // even though the session is perfectly healthy. That failure mode cost a live
 // session on 2026-09-23 (503 burst → forced manual re-auth).
 
-// authFilePath resolves the auth file a credential belongs to. The name comes
-// from credentialFileName, so a key-only credential resolves to its key slug
-// (cline-key-<last4>.json) rather than to the email it may have learned later.
+// authFilePath resolves the auth file a credential belongs to (OAuth email slug).
 func authFilePath(cfg pluginConfig, st *clineOAuthStorage) string {
 	if st == nil {
 		return ""
@@ -31,10 +29,6 @@ func authFilePath(cfg pluginConfig, st *clineOAuthStorage) string {
 	dir := clineAuthDir(cfg)
 	if dir == "" {
 		return ""
-	}
-	key := strings.TrimSpace(st.APIKey)
-	if key != "" {
-		return filepath.Join(dir, keyAuthFileNameForDir(dir, key))
 	}
 	return filepath.Join(dir, credentialFileName(st))
 }

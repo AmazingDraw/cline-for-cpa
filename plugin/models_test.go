@@ -1,10 +1,7 @@
 package plugin
 
 import (
-	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -206,122 +203,35 @@ func TestTierLimitBodiesBecomeRetryable429(t *testing.T) {
 	}
 }
 
-// Panel card title rule: identity, never the provider (the panel already shows a
-// "Cline" chip), and never two identical cards for two different keys.
+// Panel card title: identity / override / OAuth fallback.
 func TestCredentialLabel(t *testing.T) {
-	oauth := &clineOAuthStorage{Email: "user@example.com", AccessToken: "x"}
-	if got := credentialLabel(oauth, false, true); got != "user@example.com" {
-		t.Fatalf("oauth label = %q", got)
+	if got := credentialLabel(nil); got != "Cline OAuth" {
+		t.Fatalf("nil=%q", got)
 	}
-	key := &clineOAuthStorage{APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21"}
-	if got := credentialLabel(key, true, false); got != "API Key ····fa21" {
-		t.Fatalf("key label = %q", got)
+	st := &clineOAuthStorage{Email: "user@example.com", AccessToken: "x"}
+	if got := credentialLabel(st); got != "user@example.com" {
+		t.Fatalf("oauth label=%q", got)
 	}
-	override := &clineOAuthStorage{
-		Email: "user@example.com", APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21",
-		Metadata: map[string]any{"label": "Custom Key"},
-	}
-	if got := credentialLabel(override, true, false); got != "Custom Key" {
-		t.Fatalf("explicit label must win, got %q", got)
-	}
-	if got := credentialLabel(nil, true, false); got != "Cline API Key" {
-		t.Fatalf("key fallback = %q", got)
+	st.Metadata = map[string]any{"label": "Custom Key"}
+	if got := credentialLabel(st); got != "Custom Key" {
+		t.Fatalf("override=%q", got)
 	}
 }
 
-// A key-only credential must never take its file name from the display label:
-// "API Key ····fa21" contains spaces and dots, and that name ends up in a path
-// (and in the card subtitle). Regression guard for the 0.3.0 label change.
 func TestCredentialFileName(t *testing.T) {
+	if got := credentialFileName(nil); got != defaultAuthFileName {
+		t.Fatalf("nil=%q", got)
+	}
 	oauth := &clineOAuthStorage{Email: "user@example.com", AccessToken: "x"}
 	if got := credentialFileName(oauth); got != "cline-user@example.com.json" {
-		t.Fatalf("oauth file name = %q", got)
+		t.Fatalf("oauth file name=%q", got)
 	}
-	key := &clineOAuthStorage{APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21"}
-	if got := credentialFileName(key); !isGreekKeySequenceName(got) && !strings.HasPrefix(got, "cline-key-") {
-		t.Fatalf("key file name = %q, want key sequence name", got)
+	// Leftover APIKey on an OAuth record must not divert to cline-key-*.
+	oauth.APIKey = "sk-leftover"
+	if got := credentialFileName(oauth); got != "cline-user@example.com.json" {
+		t.Fatalf("leftover key diverted name=%q", got)
 	}
-	// A key-only credential that learned its email keeps the key slug: two keys
-	// on one account must not collide on one file.
-	keyKnown := &clineOAuthStorage{
-		APIKey: "sk-test-fixture-aaaaaaaaaaaaaaaaaaaaafa21",
-		Email:  "user@example.com",
-	}
-	if got := credentialFileName(keyKnown); got == "cline-user@example.com.json" {
-		t.Fatalf("key-only file name flipped to the email: %q", got)
-	}
-	// No identity at all → the generic, plugin-scoped name; it must never encode
-	// where the credential runs.
-	if got := credentialFileName(nil); got != "cline.json" {
-		t.Fatalf("generic file name = %q", got)
-	}
-	if got := credentialFileName(&clineOAuthStorage{}); got != "cline.json" {
-		t.Fatalf("identity-less credential file name = %q", got)
-	}
-	// Two different keys must not collide.
-	dir := t.TempDir()
-	configMu.Lock()
-	activeConfig.AuthDir = dir
-	configMu.Unlock()
-	a := credentialFileName(&clineOAuthStorage{APIKey: "sk-aaaa11"})
-	_ = os.WriteFile(filepath.Join(dir, a), []byte(`{"api_key":"sk-aaaa11"}`), 0o600)
-	b := credentialFileName(&clineOAuthStorage{APIKey: "sk-bbbb22"})
-	if a == b {
-		t.Fatalf("distinct keys collided on %q", a)
-	}
-}
-
-// A bare API key can still learn its account: /users/me answers for sk_… too.
-func TestKeyOnlyIdentityEnrichment(t *testing.T) {
-	original := accountLookup
-	defer func() { accountLookup = original }()
-	accountMu.Lock()
-	accountCache = map[string]cachedIdentity{}
-	accountMu.Unlock()
-
-	calls := 0
-	accountLookup = func(cfg pluginConfig, bearer string) (*accountIdentity, error) {
-		calls++
-		if bearer == "" {
-			t.Fatal("lookup must carry the key as bearer")
-		}
-		return &accountIdentity{Email: "user@example.com", DisplayName: "Test User", UserID: "usr-1"}, nil
-	}
-	cfg := pluginConfig{AuthDir: t.TempDir(), BaseURL: "https://example.invalid/api/v1"}
-
-	st := enrichKeyOnlyIdentity(cfg, clineOAuthStorage{Type: ProviderKey, APIKey: "sk-abcdef1234"})
-	if st.Email != "user@example.com" || st.AccountID != "usr-1" {
-		t.Fatalf("identity not applied: %+v", st)
-	}
-	if got := credentialLabel(&st, true, false); got != "user@example.com" {
-		t.Fatalf("card label after enrichment = %q", got)
-	}
-	if got := credentialFileName(&st); !strings.HasPrefix(got, "cline-key-") || got == "cline-user@example.com.json" {
-		t.Fatalf("file name after enrichment = %q (must stay the key slug)", got)
-	}
-	// A second call is served from the cache.
-	enrichKeyOnlyIdentity(cfg, clineOAuthStorage{Type: ProviderKey, APIKey: "sk-abcdef1234"})
-	if calls != 1 {
-		t.Fatalf("lookup calls = %d, want 1 (cached)", calls)
-	}
-	// An explicit label still wins over the resolved email.
-	st.Metadata = map[string]any{"label": "Custom Key"}
-	if got := credentialLabel(&st, true, false); got != "Custom Key" {
-		t.Fatalf("explicit label must win, got %q", got)
-	}
-
-	// Failures are non-fatal and leave the credential untouched.
-	accountMu.Lock()
-	accountCache = map[string]cachedIdentity{}
-	accountMu.Unlock()
-	accountLookup = func(cfg pluginConfig, bearer string) (*accountIdentity, error) {
-		return nil, errors.New("boom")
-	}
-	plain := enrichKeyOnlyIdentity(cfg, clineOAuthStorage{Type: ProviderKey, APIKey: "sk-zzzz9999"})
-	if plain.Email != "" {
-		t.Fatalf("failed lookup must not invent an identity: %+v", plain)
-	}
-	if got := credentialLabel(&plain, true, false); got != "API Key ····9999" {
-		t.Fatalf("label after failed lookup = %q", got)
+	if got := credentialFileName(&clineOAuthStorage{}); got != defaultAuthFileName {
+		t.Fatalf("identity-less=%q", got)
 	}
 }

@@ -27,6 +27,10 @@ const (
 	maxIdleConnsPerHost   = 8
 )
 
+// upstreamHTTPClientOverride lets tests swap the client (httptest) without
+// racing the sync.Once-built production transport. Nil in production.
+var upstreamHTTPClientOverride *http.Client
+
 var (
 	upstreamClientOnce sync.Once
 	upstreamHTTPClient *http.Client
@@ -35,6 +39,9 @@ var (
 // upstreamClient returns the shared client. Streamed responses legitimately last
 // minutes, so there is no client-wide timeout; phases are bounded instead.
 func upstreamClient() *http.Client {
+	if c := upstreamHTTPClientOverride; c != nil {
+		return c
+	}
 	upstreamClientOnce.Do(func() {
 		transport := &http.Transport{
 			Proxy: http.ProxyFromEnvironment,

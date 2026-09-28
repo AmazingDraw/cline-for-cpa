@@ -569,9 +569,6 @@ func refreshOAuthIfNeeded(cfg pluginConfig, st *clineOAuthStorage, force bool) (
 			if refreshed.AccountID == "" {
 				refreshed.AccountID = current.AccountID
 			}
-			if refreshed.APIKey == "" {
-				refreshed.APIKey = current.APIKey
-			}
 			if len(refreshed.Metadata) == 0 {
 				refreshed.Metadata = current.Metadata
 			}

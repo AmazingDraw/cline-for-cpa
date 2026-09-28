@@ -48,6 +48,10 @@ func SetHostCaller(fn func(method string, request []byte) ([]byte, error)) {
 	hostCaller = fn
 }
 
+// streamGuardClock is nil in production (streamguard.New falls back to RealClock).
+// Tests may install a ManualClock so stall branches run without wall-clock waits.
+var streamGuardClock streamguard.Clock
+
 func handleExecute(request []byte, stream bool) ([]byte, error) {
 	var req executorRequest
 	if err := json.Unmarshal(request, &req); err != nil {
@@ -121,25 +125,6 @@ func unwrapJSONBytes(raw []byte) []byte {
 		}
 	}
 	return raw
-}
-
-func apiKeyFromAuth(storageJSON []byte, metadata, authMetadata map[string]any) string {
-	if k := stringFromMap(metadata, "api_key", "APIKey", "apiKey"); k != "" {
-		return k
-	}
-	if k := stringFromMap(authMetadata, "api_key", "APIKey", "apiKey"); k != "" {
-		return k
-	}
-	if len(storageJSON) == 0 {
-		return ""
-	}
-	var stored struct {
-		APIKey string `json:"api_key"`
-	}
-	if err := json.Unmarshal(unwrapJSONBytes(storageJSON), &stored); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(stored.APIKey)
 }
 
 func stringFromMap(m map[string]any, keys ...string) string {
@@ -284,7 +269,7 @@ func collectStreamOnce(ctx context.Context, cfg pluginConfig, cred credential, p
 	// and read by this one, so both live under mu. Guarding chunks alone left
 	// stall racing: the read below is only ordered today by the happens-before
 	// that cancel() happens to establish, which is luck rather than a contract.
-	guard := streamguard.New(streamGuardConfig(cfg), nil, func(e *streamguard.StallError) {
+	guard := streamguard.New(streamGuardConfig(cfg), streamGuardClock, func(e *streamguard.StallError) {
 		mu.Lock()
 		stall = e
 		mu.Unlock()
@@ -370,7 +355,7 @@ func runGuardedProxy(ctx context.Context, cancel context.CancelFunc, cfg pluginC
 		// goroutine, so the handoff to this one is synchronised rather than
 		// relying on cancel() to order it.
 		var stallMu sync.Mutex
-		guard := streamguard.New(streamGuardConfig(cfg), nil, func(e *streamguard.StallError) {
+		guard := streamguard.New(streamGuardConfig(cfg), streamGuardClock, func(e *streamguard.StallError) {
 			stallMu.Lock()
 			stall = e
 			stallMu.Unlock()

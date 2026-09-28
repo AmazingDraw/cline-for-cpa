@@ -16,7 +16,6 @@ import (
 
 const (
 	defaultBaseURL = "https://api.cline.bot/api/v1"
-	envAPIKey      = "CLINE_API_KEY"
 	// defaultHTTPTimeoutSeconds mirrors the official DEFAULT_HTTP_TIMEOUT_MS
 	// (auth/cline.ts:45) — control-plane calls (token refresh, quota) are bounded
 	// exactly like the official client's. Streaming is not bounded by this: it
@@ -260,35 +259,6 @@ func currentConfig() pluginConfig {
 	return activeConfig
 }
 
-func resolveAPIKeys(cfg pluginConfig) []string {
-	seen := make(map[string]struct{})
-	var keys []string
-	add := func(k string) {
-		k = strings.TrimSpace(k)
-		if k == "" {
-			return
-		}
-		if _, exists := seen[k]; !exists {
-			seen[k] = struct{}{}
-			keys = append(keys, k)
-		}
-	}
-	for _, k := range cfg.APIKeys {
-		add(k)
-	}
-	if cfg.APIKey != "" {
-		add(cfg.APIKey)
-	}
-	if env := os.Getenv(envAPIKey); env != "" {
-		add(env)
-	}
-	return keys
-}
-
-func resolveAPIKey(cfg pluginConfig) string {
-	return ""
-}
-
 func streamGuardConfig(cfg pluginConfig) streamguard.Config {
 	return streamguard.Config{
 		FirstFrame:    time.Duration(cfg.FirstFrameTimeoutSeconds) * time.Second,
@@ -297,8 +267,6 @@ func streamGuardConfig(cfg pluginConfig) streamguard.Config {
 	}
 }
 
-const configManagedKeyMarker = "config_api_key"
-
 func priorityForCredential(_ string, isOAuth bool) int {
 	if isOAuth {
 		return 1
@@ -306,13 +274,9 @@ func priorityForCredential(_ string, isOAuth bool) int {
 	return 0
 }
 
-func syncConfigAPIKeyCredential(cfg pluginConfig) {
-	// 0.4.0: keys are no longer seeded or recycled. Hygiene still strips
-	// leaked api_key fields from OAuth files so a leftover cline-key-*.json
-	// cannot pollute a login.
-	syncAuthFilePriorities(cfg, clineAuthDir(cfg))
-}
-
+// syncAuthFilePriorities is leftover hygiene from the Key era: strip leaked
+// api_key fields from OAuth auth files and demote stray cline-key-*.json so
+// they cannot pollute a login. It never seeds keys.
 func syncAuthFilePriorities(cfg pluginConfig, dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
