@@ -242,10 +242,13 @@ func executeStream(ctx context.Context, cfg pluginConfig, cred credential, upstr
 		return executeStreamCollect(ctx, cfg, cred, payload)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	// Derive a cancelable parent so the goroutine can be cleaned up on return.
+	// Guard must NOT cancel this parent — only per-attempt child contexts — or a
+	// stall poisons the fresh-retry path into a spurious "canceled".
+	parent, cancel := context.WithCancel(ctx)
 	go func() {
 		defer cancel()
-		runGuardedProxy(ctx, cancel, cfg, cred, payload, req.HostCallbackID, req.StreamID)
+		runGuardedProxy(parent, cfg, cred, payload, req.HostCallbackID, req.StreamID)
 	}()
 	return okEnvelope(map[string]any{
 		"headers": map[string][]string{"content-type": {"text/event-stream"}},
@@ -292,14 +295,41 @@ func collectStreamOnce(ctx context.Context, cfg pluginConfig, cred credential, p
 
 // collectStreamWithRetry replays a stream attempt that produced nothing on a
 // fresh connection (dead keep-alive socket or upstream stall).
-func collectStreamWithRetry(ctx context.Context, cfg pluginConfig, cred credential, payload []byte) ([]map[string]any, *streamguard.StallError, error) {
-	chunks, stall, err := collectStreamOnce(ctx, cfg, cred, payload)
+func collectStreamWithRetry(parent context.Context, cfg pluginConfig, cred credential, payload []byte) ([]map[string]any, *streamguard.StallError, error) {
+	chunks, stall, err := collectStreamOnce(parent, cfg, cred, payload)
+	firstStall := stall
 	if shouldRetryFreshConnection(stall, err, len(chunks) > 0) {
-		logCredentialEvent(cfg, "stream (collect) produced no output (stall=%v err=%v) — retrying on a fresh connection", stall != nil, err)
+		if parent.Err() != nil {
+			// True user Stop (or parent deadline): do not replay.
+			return chunks, preferStall(firstStall, stall, err, parent), err
+		}
+		logCredentialEvent(cfg, "stream (collect) produced no output (stall=%v err=%v) — retrying on a fresh connection fresh_retry=1", stall != nil, err)
 		dropIdleUpstreamConnections()
-		chunks, stall, err = collectStreamOnce(ctx, cfg, cred, payload)
+		chunks, stall, err = collectStreamOnce(parent, cfg, cred, payload)
 	}
-	return chunks, stall, err
+	return chunks, preferStall(firstStall, stall, err, parent), err
+}
+
+// preferStall picks which Guard stall to report after possibly multiple attempts.
+// Parent cancel (user Stop / deadline) always wins: never report a stall as 504
+// when the caller already canceled. Last-attempt stall otherwise wins. A
+// first-round stall is kept only when a later attempt surfaces context.Canceled
+// while parent is still alive (Guard poisoned the attempt ctx). A successful
+// later attempt (err == nil) must not resurrect the first-round stall.
+func preferStall(first, last *streamguard.StallError, err error, parent context.Context) *streamguard.StallError {
+	if parent != nil && parent.Err() != nil {
+		return nil
+	}
+	if last != nil {
+		return last
+	}
+	if first == nil || err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return first
+	}
+	return nil
 }
 
 func executeStreamCollect(ctx context.Context, cfg pluginConfig, cred credential, payload []byte) ([]byte, error) {
@@ -315,24 +345,31 @@ func executeStreamCollect(ctx context.Context, cfg pluginConfig, cred credential
 	// which is what separates "subscription is dead" (401) from "refresh hiccup,
 	// try again later" (503) in the classification below.
 	refreshRecovered := false
-	if status, ok := upstreamStatusOf(err); ok && status == http.StatusUnauthorized {
-		if newCred, changed := forceRefreshCredential(cfg, cred); changed {
-			refreshRecovered = true
-			dropIdleUpstreamConnections()
-			chunks, stall, err = collectStreamWithRetry(ctx, cfg, newCred, payload)
-			if err == nil && stall == nil {
-				return okEnvelope(map[string]any{
-					"headers": map[string][]string{"content-type": {"text/event-stream"}},
-					"chunks":  chunks,
-				})
+	if status, ok := upstreamStatusOf(err); ok && status == http.StatusUnauthorized && stall == nil {
+		if ctx.Err() == nil {
+			if newCred, changed := forceRefreshCredential(cfg, cred); changed {
+				refreshRecovered = true
+				dropIdleUpstreamConnections()
+				chunks, stall, err = collectStreamWithRetry(ctx, cfg, newCred, payload)
+				if err == nil && stall == nil {
+					return okEnvelope(map[string]any{
+						"headers": map[string][]string{"content-type": {"text/event-stream"}},
+						"chunks":  chunks,
+					})
+				}
+				cred = newCred
 			}
-			cred = newCred
 		}
 	}
+	// Outcome priority (aligned with runGuardedProxy):
+	// 1) recorded stall  2) parent cancel without stall  3) HTTP  4) transport
 	if stall != nil {
 		return StallEnvelope(stall), nil
 	}
-	if err != nil && ctx.Err() == nil {
+	if ctx.Err() != nil {
+		return FailureEnvelope(ClassifyTransport(context.Canceled)), nil
+	}
+	if err != nil {
 		if status, ok := upstreamStatusOf(err); ok {
 			return FailureEnvelope(ClassifyUpstreamHTTPForSourceAfterRefresh(status, err.Error(), cred.source, refreshRecovered)), nil
 		}
@@ -344,9 +381,14 @@ func executeStreamCollect(ctx context.Context, cfg pluginConfig, cred credential
 	})
 }
 
-func runGuardedProxy(ctx context.Context, cancel context.CancelFunc, cfg pluginConfig, cred credential, payload []byte, callbackID, streamID string) {
+func runGuardedProxy(parent context.Context, cfg pluginConfig, cred credential, payload []byte, callbackID, streamID string) {
 	attempt := func(c credential) (*streamguard.StallError, error, bool) {
-		httpReq, err := newUpstreamRequest(ctx, cfg, c.bearer, payload, true)
+		// Each attempt gets its own cancelable child of parent. Guard may only
+		// cancel this child; canceling parent would poison the next fresh retry.
+		attemptCtx, attemptCancel := context.WithCancel(parent)
+		defer attemptCancel()
+
+		httpReq, err := newUpstreamRequest(attemptCtx, cfg, c.bearer, payload, true)
 		if err != nil {
 			return nil, err, false
 		}
@@ -359,13 +401,13 @@ func runGuardedProxy(ctx context.Context, cancel context.CancelFunc, cfg pluginC
 			stallMu.Lock()
 			stall = e
 			stallMu.Unlock()
-			cancel()
+			attemptCancel()
 		})
 		guard.Start()
 		defer guard.Disarm()
 
 		emitted := false
-		proxyErr := proxySSE(ctx, httpReq, guard, func(line []byte) error {
+		proxyErr := proxySSE(attemptCtx, httpReq, guard, func(line []byte) error {
 			emitted = true
 			return emitHostChunk(callbackID, streamID, line)
 		})
@@ -379,27 +421,40 @@ func runGuardedProxy(ctx context.Context, cancel context.CancelFunc, cfg pluginC
 	// freshly minted bearer, so an unrecoverable 401 stays a retryable 503.
 	refreshRecovered := false
 	stall, err, emitted := attempt(cred)
+	firstStall := stall
 	// Retry once on a 401 that produced no output: refresh and replay.
-	if err != nil && !emitted && stall == nil {
+	if err != nil && !emitted && stall == nil && parent.Err() == nil {
 		if status, ok := upstreamStatusOf(err); ok && status == http.StatusUnauthorized {
 			if newCred, changed := forceRefreshCredential(cfg, cred); changed {
 				refreshRecovered = true
 				dropIdleUpstreamConnections()
 				cred = newCred
 				stall, err, emitted = attempt(cred)
+				if stall != nil {
+					firstStall = stall
+				}
 			}
 		}
 	}
 	// Replay once on a fresh connection when nothing was emitted: a silently
 	// dead keep-alive socket is indistinguishable from an upstream stall here.
 	if shouldRetryFreshConnection(stall, err, emitted) {
-		logCredentialEvent(cfg, "stream produced no output (stall=%v err=%v) — retrying on a fresh connection", stall != nil, err)
-		dropIdleUpstreamConnections()
-		stall, err, emitted = attempt(cred)
+		if parent.Err() != nil {
+			// User Stop (or parent deadline) — do not replay.
+		} else {
+			logCredentialEvent(cfg, "stream produced no output (stall=%v err=%v) — retrying on a fresh connection fresh_retry=1", stall != nil, err)
+			dropIdleUpstreamConnections()
+			stall, err, emitted = attempt(cred)
+		}
 	}
-	if stall != nil {
+	reportStall := preferStall(firstStall, stall, err, parent)
+	if reportStall != nil {
 		// Primary path: OpenAI JSON in stream.close error string (HTTP already 200).
-		closeHostStream(callbackID, streamID, errors.New(errorBodyText(ClassifyStall(stall))))
+		closeHostStream(callbackID, streamID, errors.New(errorBodyText(ClassifyStall(reportStall))))
+		return
+	}
+	if parent.Err() != nil {
+		closeHostStream(callbackID, streamID, errors.New(errorBodyText(ClassifyTransport(context.Canceled))))
 		return
 	}
 	if err != nil {
@@ -429,8 +484,17 @@ func shouldRetryFreshConnection(stall *streamguard.StallError, err error, emitte
 	if err == nil {
 		return false
 	}
+	if status, ok := upstreamStatusOf(err); ok && status >= 400 && status < 500 {
+		return false
+	}
 	msg := strings.ToLower(err.Error())
-	for _, hint := range []string{"timeout", "timed out", "deadline", "connection reset", "eof", "broken pipe", "no route", "connection refused"} {
+	// Zero-output transport / transient stream failures only. Keep hints narrow:
+	// do not treat 401/4xx business errors as fresh-connection problems.
+	for _, hint := range []string{
+		"timeout", "timed out", "deadline",
+		"connection reset", "eof", "broken pipe", "no route", "connection refused",
+		"internal_error", "stream error", "http2:", "unexpected eof",
+	} {
 		if strings.Contains(msg, hint) {
 			return true
 		}

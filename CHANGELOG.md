@@ -2,6 +2,14 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.4 — 2026-09-30
+
+审查修补：Stop 以 `parent.Err()` 优先于首轮 stall（避免重试中途取消被报成 504）；`shouldRetryFreshConnection` 排除 4xx（含 body 带 EOF 字样的 400）；collect 重试日志补 `fresh_retry=1`。
+
+## 0.4.3 — 2026-09-30
+
+断流续上 P0/P1：`runGuardedProxy` 每轮独立 attempt ctx（Guard 只取消本轮），stall 分类优先于 poisoned `canceled`；`shouldRetryFreshConnection` 覆盖 `INTERNAL_ERROR` / stream error / `http2:` / unexpected EOF（仍限零输出、最多一次）。collect 路径与 async 结果优先级对齐。
+
 ## 0.4.2 — 2026-09-28
 
 移除 OAuth-only 后无用的 API Key 路径：`resolveAPIKeys` / `apiKeyFromAuth`、希腊名 key 文件、key-only `auth.refresh` 回声与 `/users/me` 身份补全。残留 `api_key` yaml 字段仍可加载但不生效；auth 文件卫生仍会剥掉 OAuth 文件里误写的 `api_key`。

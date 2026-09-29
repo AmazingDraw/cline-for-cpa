@@ -130,7 +130,14 @@ func TestShouldRetryFreshConnection(t *testing.T) {
 		{"broken_pipe", nil, errors.New("write: broken pipe"), false, true},
 		{"no_route", nil, errors.New("no route to host"), false, true},
 		{"refused", nil, errors.New("connection refused"), false, true},
+		{"internal_error", nil, errors.New("rpc error: code = Internal desc = INTERNAL_ERROR"), false, true},
+		{"stream_error", nil, errors.New("stream error: stream ID 1; INTERNAL_ERROR"), false, true},
+		{"http2_hint", nil, errors.New("http2: server sent GOAWAY"), false, true},
+		{"unexpected_eof", nil, errors.New("unexpected EOF"), false, true},
 		{"other_err", nil, errors.New("something else"), false, false},
+		{"business_401", nil, errors.New("upstream status 401: unauthorized"), false, false},
+		{"4xx_eof_in_body", nil, errors.New("upstream status 400: unexpected EOF while parsing request body"), false, false},
+		{"5xx_internal_still", nil, errors.New("upstream status 500: INTERNAL_ERROR"), false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,6 +145,23 @@ func TestShouldRetryFreshConnection(t *testing.T) {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPreferStallParentCancelDropsFirst(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := &streamguard.StallError{Kind: streamguard.KindFirstFrame, Message: "ff"}
+	cancel()
+	if got := preferStall(first, nil, context.Canceled, parent); got != nil {
+		t.Fatalf("parent cancel must drop first stall, got %+v", got)
+	}
+}
+
+func TestPreferStallPoisonedAttemptKeepsFirst(t *testing.T) {
+	first := &streamguard.StallError{Kind: streamguard.KindFirstFrame, Message: "ff"}
+	if got := preferStall(first, nil, context.Canceled, context.Background()); got != first {
+		t.Fatalf("poisoned attempt cancel must keep first stall while parent lives")
 	}
 }
 
@@ -733,7 +757,7 @@ func TestRunGuardedProxySuccess(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runGuardedProxy(ctx, cancel, cfg, credential{bearer: "t"}, executorPayload("m"), "cb1", "sid1")
+	runGuardedProxy(ctx, cfg, credential{bearer: "t"}, executorPayload("m"), "cb1", "sid1")
 	select {
 	case got := <-closed:
 		if got != "ok" {
@@ -761,7 +785,7 @@ func TestRunGuardedProxyUpstreamError(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runGuardedProxy(ctx, cancel, cfg, credential{bearer: "t", source: "oauth"}, executorPayload("m"), "cb", "sid")
+	runGuardedProxy(ctx, cfg, credential{bearer: "t", source: "oauth"}, executorPayload("m"), "cb", "sid")
 	select {
 	case got := <-closed:
 		if !strings.Contains(got, "error") {
@@ -817,7 +841,7 @@ func TestRunGuardedProxyUnauthorizedRefresh(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runGuardedProxy(ctx, cancel, cfg, cred, executorPayload("m"), "cb", "sid")
+	runGuardedProxy(ctx, cfg, cred, executorPayload("m"), "cb", "sid")
 	select {
 	case got := <-closed:
 		if got != "ok" {
@@ -859,14 +883,20 @@ func TestRunGuardedProxyStall(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runGuardedProxy(ctx, cancel, cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
+		runGuardedProxy(ctx, cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
 	}()
 	select {
 	case got := <-closed:
 		if !strings.Contains(got, "error") {
 			t.Fatalf("expected stall close error, got %s", got)
 		}
-	case <-time.After(5 * time.Second):
+		if strings.Contains(got, `"code":"canceled"`) || strings.Contains(got, "已取消") {
+			t.Fatalf("stall must not surface as canceled: %s", got)
+		}
+		if !strings.Contains(got, "first_frame") && !strings.Contains(got, "首帧") {
+			t.Fatalf("expected first_frame stall classification, got %s", got)
+		}
+	case <-time.After(8 * time.Second):
 		t.Fatal("timeout waiting for stall close")
 	}
 	select {
@@ -1073,6 +1103,309 @@ func TestHandleExecuteInvalidPayload(t *testing.T) {
 	env := decodeEnvelope(t, out)
 	if env.OK {
 		t.Fatal("expected invalid request failure")
+	}
+}
+
+func extractCloseErrorJSON(t *testing.T, closePayload string) string {
+	t.Helper()
+	var req map[string]any
+	if err := json.Unmarshal([]byte(closePayload), &req); err != nil {
+		t.Fatalf("close payload json: %v raw=%s", err, closePayload)
+	}
+	errMsg, _ := req["error"].(string)
+	return errMsg
+}
+
+func TestRunGuardedProxyStallThenRetrySucceeds(t *testing.T) {
+	streamGuardClock = nil
+	var calls int32
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sampleSSEBody())
+	})
+	cfg.FirstFrameTimeoutSeconds = 1
+	cfg.StreamSilenceTimeoutSeconds = 30
+	cfg.StreamHeartbeatOnlyTimeoutSeconds = 60
+
+	closed := make(chan string, 1)
+	var emits int32
+	installHostCaller(t, func(method string, request []byte) ([]byte, error) {
+		switch method {
+		case "host.stream.emit":
+			atomic.AddInt32(&emits, 1)
+		case "host.stream.close":
+			closed <- string(request)
+		}
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runGuardedProxy(ctx, cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
+	}()
+	select {
+	case got := <-closed:
+		if strings.Contains(got, `"error"`) && !strings.Contains(got, `"error":""`) {
+			// Some hosts always include error key; treat non-empty error as failure.
+			errJSON := extractCloseErrorJSON(t, got)
+			if errJSON != "" {
+				t.Fatalf("expected successful close after fresh retry, got error=%s calls=%d", errJSON, calls)
+			}
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for close after stall+retry")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runGuardedProxy did not return")
+	}
+	if atomic.LoadInt32(&calls) < 2 {
+		t.Fatalf("expected fresh retry, calls=%d", calls)
+	}
+	if atomic.LoadInt32(&emits) < 1 {
+		t.Fatalf("expected emits after retry, emits=%d", emits)
+	}
+}
+
+func TestRunGuardedProxyParentCancelIsCanceled(t *testing.T) {
+	started := make(chan struct{})
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	})
+	cfg.FirstFrameTimeoutSeconds = 30
+	cfg.StreamSilenceTimeoutSeconds = 60
+	cfg.StreamHeartbeatOnlyTimeoutSeconds = 90
+
+	closed := make(chan string, 1)
+	installHostCaller(t, func(method string, request []byte) ([]byte, error) {
+		if method == "host.stream.close" {
+			closed <- string(request)
+		}
+		return nil, nil
+	})
+
+	parent, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runGuardedProxy(parent, cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upstream never started")
+	}
+	cancel()
+	select {
+	case got := <-closed:
+		errJSON := extractCloseErrorJSON(t, got)
+		if !strings.Contains(errJSON, `"code":"canceled"`) && !strings.Contains(errJSON, "已取消") {
+			t.Fatalf("expected canceled classification, got %s", errJSON)
+		}
+		if strings.Contains(errJSON, "first_frame") || strings.Contains(errJSON, "silence") {
+			t.Fatalf("parent cancel must not surface as stall: %s", errJSON)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for canceled close")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runGuardedProxy did not return")
+	}
+}
+
+func TestRunGuardedProxyStallRetryThenParentCancelIsCanceled(t *testing.T) {
+	streamGuardClock = nil
+	var calls int32
+	var once sync.Once
+	secondStarted := make(chan struct{})
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if n == 2 {
+			once.Do(func() { close(secondStarted) })
+		}
+		<-r.Context().Done()
+	})
+	cfg.FirstFrameTimeoutSeconds = 1
+	cfg.StreamSilenceTimeoutSeconds = 30
+	cfg.StreamHeartbeatOnlyTimeoutSeconds = 60
+
+	closed := make(chan string, 1)
+	installHostCaller(t, func(method string, request []byte) ([]byte, error) {
+		if method == "host.stream.close" {
+			closed <- string(request)
+		}
+		return nil, nil
+	})
+
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runGuardedProxy(parent, cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
+	}()
+	select {
+	case <-secondStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no fresh retry attempt; calls=%d", atomic.LoadInt32(&calls))
+	}
+	cancel()
+	select {
+	case got := <-closed:
+		errJSON := extractCloseErrorJSON(t, got)
+		if strings.Contains(errJSON, "first_frame") || strings.Contains(errJSON, "silence") {
+			t.Fatalf("Stop during retry must not surface as stall: %s", errJSON)
+		}
+		if !strings.Contains(errJSON, `"code":"canceled"`) && !strings.Contains(errJSON, "已取消") {
+			t.Fatalf("expected canceled, got %s", errJSON)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("no close")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runGuardedProxy did not return")
+	}
+}
+
+func TestRunGuardedProxy400UnexpectedEOFDoesNotRetry(t *testing.T) {
+	var calls int32
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"unexpected EOF while parsing request body"}}`)
+	})
+	closed := make(chan string, 1)
+	installHostCaller(t, func(m string, req []byte) ([]byte, error) {
+		if m == "host.stream.close" {
+			closed <- string(req)
+		}
+		return nil, nil
+	})
+	runGuardedProxy(context.Background(), cfg, credential{bearer: "t", source: "oauth"}, executorPayload("m"), "cb", "sid")
+	select {
+	case got := <-closed:
+		if atomic.LoadInt32(&calls) != 1 {
+			t.Fatalf("4xx must not fresh-retry, calls=%d close=%s", calls, got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no close")
+	}
+}
+
+func TestRunGuardedProxyInternalErrorZeroOutputRetriesOnce(t *testing.T) {
+	var calls int32
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"message":"INTERNAL_ERROR","type":"internal_error"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sampleSSEBody())
+	})
+
+	closed := make(chan string, 1)
+	var emits int32
+	installHostCaller(t, func(method string, request []byte) ([]byte, error) {
+		switch method {
+		case "host.stream.emit":
+			atomic.AddInt32(&emits, 1)
+		case "host.stream.close":
+			closed <- string(request)
+		}
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runGuardedProxy(ctx, cfg, credential{bearer: "t", source: "oauth"}, executorPayload("m"), "cb", "sid")
+	select {
+	case got := <-closed:
+		errJSON := extractCloseErrorJSON(t, got)
+		if errJSON != "" {
+			t.Fatalf("expected success after INTERNAL_ERROR fresh retry, got %s calls=%d", errJSON, calls)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("want exactly one fresh retry (2 calls), got %d", calls)
+	}
+	if atomic.LoadInt32(&emits) < 1 {
+		t.Fatalf("emits=%d", emits)
+	}
+}
+
+func TestCollectStreamParentCancelIsCanceled(t *testing.T) {
+	started := make(chan struct{})
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	})
+	cfg.FirstFrameTimeoutSeconds = 30
+
+	parent, cancel := context.WithCancel(context.Background())
+	errCh := make(chan []byte, 1)
+	go func() {
+		raw, err := executeStreamCollect(parent, cfg, credential{bearer: "t"}, executorPayload("m"))
+		if err != nil {
+			errCh <- []byte("goerr:" + err.Error())
+			return
+		}
+		errCh <- raw
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upstream never started")
+	}
+	cancel()
+	select {
+	case raw := <-errCh:
+		s := string(raw)
+		if strings.HasPrefix(s, "goerr:") {
+			t.Fatalf("unexpected go error: %s", s)
+		}
+		if !strings.Contains(s, "canceled") && !strings.Contains(s, "已取消") {
+			t.Fatalf("expected canceled envelope, got %s", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for collect cancel")
 	}
 }
 
