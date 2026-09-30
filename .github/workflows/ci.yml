@@ -5,9 +5,17 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # UTC 04:17 daily — previously `modelmeta-drift` required schedule but
+  # `on:` had none, so the job never ran except manual dispatch.
+  schedule:
+    - cron: '17 4 * * *'
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -32,7 +40,8 @@ jobs:
         run: |
           unformatted="$(gofmt -l . | grep -v '^$' || true)"
           if [ -n "$unformatted" ]; then
-            echo "::error::gofmt required on:"; echo "$unformatted"
+            echo "::error::gofmt required on:"
+            echo "$unformatted"
             gofmt -d $unformatted
             exit 1
           fi
@@ -48,11 +57,8 @@ jobs:
 
   modelmeta-drift:
     name: model metadata drift
-    # Needs a live Cline bearer, so it cannot gate a PR. It runs on a schedule and
-    # on demand: the whole point of `tools/modelmeta --check` is to catch the
-    # upstream silently changing a context window or a max_completion_tokens
-    # between releases, which is a scheduled-discovery problem, not a per-commit
-    # one. Failing this job is a signal to run `go run ./tools/modelmeta`.
+    # Live Cline bearer required. Not a PR gate: upstream windows can move
+    # between commits. Daily schedule + manual dispatch only.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -68,7 +74,7 @@ jobs:
           MODELMETA_TOKEN: ${{ secrets.CLINE_BEARER }}
         run: |
           if [ -z "$MODELMETA_TOKEN" ]; then
-            echo "::notice::CLINE_BEARER secret not set; skipping drift check"
-            exit 0
+            echo "::error::set repository secret CLINE_BEARER (Cline OAuth access token) so modelmeta --check can run"
+            exit 1
           fi
           go run ./tools/modelmeta --check -token "$MODELMETA_TOKEN"

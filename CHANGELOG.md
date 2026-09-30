@@ -6,6 +6,10 @@
 
 `defaultClientVersion` 0.0.36 → **0.0.39**（对齐今晚 live cache 的 desktop UA 兜底）。
 
+测试：ABI 窗口跟 `lookupModel`，不再钉死 1048576（开源 CI 在 0.4.5 刷新后红了）。不升号。
+
+开源 CI：`modelmeta-drift` 补上每日 `schedule`；缺 `CLINE_BEARER` 改为失败而不是跳过。
+
 ## 0.4.5 — 2026-09-30
 
 流式路径识别 `finish_reason:"error"`（复用 `midStreamErrorDetail`），不再当成功收尾。零输出：`server_error` fresh retry 一次；`context_length_exceeded` / `content_filter` 结构化失败且 `retryable:false`；`rate_limit` 按 429、`retryable:true`，不立即重试。已吐字则不重放，`host.stream.close` 带错误。`chat/completions` 失败与流内错误记录 `x-request-id`。402 文案指向 app.cline.bot。模型表刷新：免费池去掉 `cline-free/gemini-3.8-flash`（free+stealth 现为 5）。

@@ -133,10 +133,7 @@ func TestModelMetadataReachesABIPayload(t *testing.T) {
 	if !ok {
 		t.Fatal("free mimo model missing from the catalog")
 	}
-	if mimo.Meta.ContextLength != 1048576 {
-		t.Fatalf("mimo-v2.6-flash context = %d, want 1048576", mimo.Meta.ContextLength)
-	}
-	if mimo.Meta.MaxOutputTokens <= 0 || mimo.Meta.DisplayName == "" {
+	if mimo.Meta.ContextLength <= 0 || mimo.Meta.MaxOutputTokens <= 0 || mimo.Meta.DisplayName == "" {
 		t.Fatalf("mimo-v2.6-flash metadata incomplete: %+v", mimo.Meta)
 	}
 
@@ -159,8 +156,9 @@ func TestModelMetadataReachesABIPayload(t *testing.T) {
 		if m.OwnedBy != ProviderKey || m.Type != ProviderKey {
 			t.Fatalf("OwnedBy/Type must stay %q or the host drops the model: %+v", ProviderKey, m)
 		}
-		if m.ContextLength != 1048576 || m.MaxCompletionTokens != 131072 {
-			t.Fatalf("ABI window fields not populated: ctx=%d maxOut=%d", m.ContextLength, m.MaxCompletionTokens)
+		if m.ContextLength != mimo.Meta.ContextLength || m.MaxCompletionTokens != mimo.Meta.MaxOutputTokens {
+			t.Fatalf("ABI window fields not populated: ctx=%d maxOut=%d lookup ctx=%d maxOut=%d",
+				m.ContextLength, m.MaxCompletionTokens, mimo.Meta.ContextLength, mimo.Meta.MaxOutputTokens)
 		}
 		if m.InputTokenLimit != m.ContextLength || m.OutputTokenLimit != m.MaxCompletionTokens {
 			t.Fatalf("legacy window fields disagree with ContextLength/MaxCompletionTokens: %+v", m)
