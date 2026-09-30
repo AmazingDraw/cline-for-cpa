@@ -27,7 +27,7 @@ const (
 // When bumping this for a release, also refresh static fallbacks:
 //   - plugin/cline_headers.go  defaultClientVersion  (desktop UA if live probe fails)
 //   - go run ./tools/modelmeta  → plugin/modelmeta_gen.go  (then --check)
-var PluginVersion = "0.4.4"
+var PluginVersion = "0.4.6"
 
 // HandleMethod is the plugin ABI dispatcher (mirrors cursor-for-cpa plugin.HandleMethod).
 func HandleMethod(method string, request []byte) ([]byte, error) {

@@ -55,6 +55,9 @@ func TestClassifyUpstreamHTTP402429(t *testing.T) {
 	if f402.retryable == nil || *f402.retryable {
 		t.Fatalf("402 should not be retryable")
 	}
+	if !strings.Contains(f402.message, "app.cline.bot") {
+		t.Fatalf("402 message missing credit hint: %q", f402.message)
+	}
 
 	f429 := ClassifyUpstreamHTTP(http.StatusTooManyRequests, "slow down")
 	if f429.status != 429 {

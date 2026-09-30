@@ -145,7 +145,64 @@ func FailureEnvelope(f failure) []byte {
 	if code == "" {
 		code = "request_error"
 	}
+	// Surface retryable on the envelope itself (not only inside the OpenAI JSON
+	// message) so collect / non-stream callers can branch without re-parsing.
+	if f.retryable != nil {
+		return ErrorEnvelopeRetryable(code, errorBodyText(f), f.status, *f.retryable)
+	}
 	return ErrorEnvelopeWithStatus(code, errorBodyText(f), f.status)
+}
+
+// classifyMidStream maps an official mid-stream error code (finish_reason:"error")
+// onto a failure. Permanent codes are not retryable. rate_limit is 429-shaped and
+// retryable, but the caller must not fresh-retry it immediately. server_error is
+// transient: the streaming path may replay once when nothing was emitted.
+func classifyMidStream(code, message string) failure {
+	code = strings.TrimSpace(code)
+	message = strings.TrimSpace(message)
+	if code == "" {
+		code = "mid_stream_error"
+	}
+	if message == "" {
+		message = "上游在生成过程中失败。"
+	}
+	switch code {
+	case "server_error":
+		return failure{
+			status:    http.StatusBadGateway,
+			message:   "上游生成中断（server_error），可稍后重试。" + message,
+			code:      code,
+			retryable: retryablePtr(true),
+		}
+	case "rate_limit":
+		return failure{
+			status:    http.StatusTooManyRequests,
+			message:   "上游生成中限流（rate_limit），请稍后重试。" + message,
+			code:      code,
+			retryable: retryablePtr(true),
+		}
+	case "context_length_exceeded":
+		return failure{
+			status:    http.StatusBadRequest,
+			message:   "输入超过模型上下文长度（context_length_exceeded）。" + message,
+			code:      code,
+			retryable: retryablePtr(false),
+		}
+	case "content_filter":
+		return failure{
+			status:    http.StatusBadRequest,
+			message:   "内容被安全过滤拦截（content_filter）。" + message,
+			code:      code,
+			retryable: retryablePtr(false),
+		}
+	default:
+		return failure{
+			status:    http.StatusBadRequest,
+			message:   fmt.Sprintf("上游流内错误（%s）。%s", code, message),
+			code:      code,
+			retryable: retryablePtr(false),
+		}
+	}
 }
 
 // StallEnvelope maps a Stream Guard failure onto the classified envelope path.
@@ -228,7 +285,7 @@ func ClassifyUpstreamHTTP(status int, body string) failure {
 	case http.StatusUnauthorized:
 		message = "上游鉴权失败（401）：API Key 无效或已过期。"
 	case http.StatusPaymentRequired:
-		message = "上游要求付费或额度不足（402）。"
+		message = "上游要求付费或额度不足（402）。请到 app.cline.bot 补充额度（订阅额度请在 Cline 控制台查看）。"
 	case http.StatusForbidden:
 		message = "上游拒绝访问（403）：无权使用该模型或账号受限。"
 	case http.StatusTooManyRequests:

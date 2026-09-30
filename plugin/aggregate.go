@@ -75,6 +75,33 @@ type chunkEnvelope struct {
 	} `json:"choices"`
 }
 
+// parseMidStreamError reports a finish_reason:"error" detail from one SSE data
+// payload, using the same midStreamErrorDetail shape the aggregate path stores.
+// Non-JSON frames, "[DONE]", and normal chunks return nil. A finish_reason of
+// "error" with no error object still returns a non-nil empty detail so callers
+// cannot treat the chunk as success.
+func parseMidStreamError(payload []byte) *midStreamErrorDetail {
+	payload = bytes.TrimSpace(payload)
+	if len(payload) == 0 || payload[0] != '{' {
+		return nil
+	}
+	var chunk chunkEnvelope
+	if err := json.Unmarshal(payload, &chunk); err != nil {
+		return nil
+	}
+	for _, choice := range chunk.Choices {
+		if choice.FinishReason == nil || *choice.FinishReason != "error" {
+			continue
+		}
+		if choice.Error != nil {
+			d := *choice.Error
+			return &d
+		}
+		return &midStreamErrorDetail{}
+	}
+	return nil
+}
+
 // Consume folds one SSE data payload. "[DONE]" terminates the stream.
 func (a *completionAggregate) Consume(payload []byte) error {
 	payload = bytes.TrimSpace(payload)

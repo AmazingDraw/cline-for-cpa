@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -138,6 +140,13 @@ func TestShouldRetryFreshConnection(t *testing.T) {
 		{"business_401", nil, errors.New("upstream status 401: unauthorized"), false, false},
 		{"4xx_eof_in_body", nil, errors.New("upstream status 400: unexpected EOF while parsing request body"), false, false},
 		{"5xx_internal_still", nil, errors.New("upstream status 500: INTERNAL_ERROR"), false, true},
+		{"midstream_server_error", nil, &midStreamProxyError{Code: "server_error", Message: "boom"}, false, true},
+		{"midstream_server_emitted", nil, &midStreamProxyError{Code: "server_error", Message: "boom"}, true, false},
+		{"midstream_rate_limit", nil, &midStreamProxyError{Code: "rate_limit", Message: "slow"}, false, false},
+		{"midstream_context", nil, &midStreamProxyError{Code: "context_length_exceeded", Message: "too long"}, false, false},
+		{"midstream_filter", nil, &midStreamProxyError{Code: "content_filter", Message: "blocked"}, false, false},
+		{"midstream_string_server_retry", nil, errors.New("upstream mid-stream error (server_error): boom"), false, true},
+		{"midstream_string_context_not_retry", nil, errors.New("upstream mid-stream error (context_length_exceeded): boom"), false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -378,7 +387,7 @@ func TestProxySSETable(t *testing.T) {
 			guard := streamguard.New(streamGuardConfig(cfg), nil, nil)
 			guard.Start()
 			defer guard.Disarm()
-			err = proxySSE(ctx, httpReq, guard, func(line []byte) error {
+			err = proxySSE(ctx, cfg, httpReq, guard, func(line []byte) error {
 				emitted = append(emitted, append([]byte(nil), line...))
 				return nil
 			})
@@ -422,7 +431,7 @@ func TestProxySSEContextCancel(t *testing.T) {
 	defer guard.Disarm()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- proxySSE(ctx, httpReq, guard, func([]byte) error { return nil })
+		errCh <- proxySSE(ctx, cfg, httpReq, guard, func([]byte) error { return nil })
 	}()
 	select {
 	case <-started:
@@ -452,7 +461,7 @@ func TestProxySSEEmitError(t *testing.T) {
 	guard := streamguard.New(streamGuardConfig(cfg), nil, nil)
 	guard.Start()
 	defer guard.Disarm()
-	err = proxySSE(context.Background(), httpReq, guard, func([]byte) error {
+	err = proxySSE(context.Background(), cfg, httpReq, guard, func([]byte) error {
 		return errors.New("emit failed")
 	})
 	if err == nil || !strings.Contains(err.Error(), "emit failed") {
@@ -473,7 +482,7 @@ func TestProxySSEDialError(t *testing.T) {
 	guard := streamguard.New(streamGuardConfig(cfg), nil, nil)
 	guard.Start()
 	defer guard.Disarm()
-	err = proxySSE(context.Background(), httpReq, guard, func([]byte) error { return nil })
+	err = proxySSE(context.Background(), cfg, httpReq, guard, func([]byte) error { return nil })
 	if err == nil {
 		t.Fatal("expected dial error")
 	}
@@ -1479,4 +1488,386 @@ func TestSetHostCallerRoundTrip(t *testing.T) {
 	if !called {
 		t.Fatal("not called")
 	}
+}
+
+// --- mid-stream error (finish_reason:"error") --------------------------------
+
+func sseMidStreamError(code, msg string) string {
+	payload := fmt.Sprintf(`{"id":"gen_err","choices":[{"index":0,"finish_reason":"error","error":{"code":%q,"message":%q}}]}`, code, msg)
+	return "data: " + payload + "\n\ndata: [DONE]\n\n"
+}
+
+func sseContentThenMidStreamError(content, code, msg string) string {
+	c1 := fmt.Sprintf(`{"id":"gen_err","choices":[{"index":0,"delta":{"role":"assistant","content":%q},"finish_reason":null}]}`, content)
+	c2 := fmt.Sprintf(`{"id":"gen_err","choices":[{"index":0,"finish_reason":"error","error":{"code":%q,"message":%q}}]}`, code, msg)
+	return "data: " + c1 + "\n\ndata: " + c2 + "\n\ndata: [DONE]\n\n"
+}
+
+func decodeCloseError(t *testing.T, raw string) errorBody {
+	t.Helper()
+	var req map[string]any
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatalf("close json: %v raw=%s", err, raw)
+	}
+	errMsg, _ := req["error"].(string)
+	if errMsg == "" {
+		t.Fatalf("close has no error (treated as success): %s", raw)
+	}
+	var body errorBody
+	if err := json.Unmarshal([]byte(errMsg), &body); err != nil {
+		t.Fatalf("close error is not OpenAI JSON: %v (%s)", err, errMsg)
+	}
+	return body
+}
+
+func assertRetryable(t *testing.T, got *bool, want bool) {
+	t.Helper()
+	if got == nil || *got != want {
+		t.Fatalf("retryable=%v want %v", got, want)
+	}
+}
+
+func TestProxySSEMidStreamErrorNotEmitted(t *testing.T) {
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-request-id", "req-mid-1")
+		_, _ = io.WriteString(w, sseContentThenMidStreamError("hello", "context_length_exceeded", "too long"))
+	})
+	httpReq, err := newUpstreamRequest(context.Background(), cfg, "tok", []byte(`{"model":"m"}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var emitted [][]byte
+	guard := streamguard.New(streamGuardConfig(cfg), nil, nil)
+	guard.Start()
+	defer guard.Disarm()
+
+	old := os.Stderr
+	r, w, errPipe := os.Pipe()
+	if errPipe != nil {
+		t.Fatal(errPipe)
+	}
+	os.Stderr = w
+	logBuf := &bytes.Buffer{}
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(logBuf, r)
+		close(done)
+	}()
+
+	err = proxySSE(context.Background(), cfg, httpReq, guard, func(line []byte) error {
+		emitted = append(emitted, append([]byte(nil), line...))
+		return nil
+	})
+	os.Stderr = old
+	_ = w.Close()
+	<-done
+	_ = r.Close()
+
+	me, ok := midStreamErrorOf(err)
+	if !ok || me.Code != "context_length_exceeded" {
+		t.Fatalf("err=%v", err)
+	}
+	if me.RequestID != "req-mid-1" {
+		t.Fatalf("request id=%q", me.RequestID)
+	}
+	if len(emitted) != 1 || !bytes.Contains(emitted[0], []byte("hello")) {
+		t.Fatalf("emitted=%q", emitted)
+	}
+	for _, line := range emitted {
+		if bytes.Contains(line, []byte(`"finish_reason":"error"`)) || bytes.Equal(line, []byte("[DONE]")) {
+			t.Fatalf("error chunk or DONE was forwarded: %s", line)
+		}
+	}
+	if !strings.Contains(logBuf.String(), "x-request-id=req-mid-1") || !strings.Contains(logBuf.String(), "code=context_length_exceeded") {
+		t.Fatalf("log=%q", logBuf.String())
+	}
+}
+
+func TestProxySSELogsRequestIDOnHTTPFailure(t *testing.T) {
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-request-id", "req-http-9")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, `{"error":"insufficient credits"}`)
+	})
+	httpReq, err := newUpstreamRequest(context.Background(), cfg, "tok", []byte(`{"model":"m"}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := streamguard.New(streamGuardConfig(cfg), nil, nil)
+	guard.Start()
+	defer guard.Disarm()
+
+	old := os.Stderr
+	r, w, errPipe := os.Pipe()
+	if errPipe != nil {
+		t.Fatal(errPipe)
+	}
+	os.Stderr = w
+	logBuf := &bytes.Buffer{}
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(logBuf, r)
+		close(done)
+	}()
+	err = proxySSE(context.Background(), cfg, httpReq, guard, func([]byte) error { return nil })
+	os.Stderr = old
+	_ = w.Close()
+	<-done
+	_ = r.Close()
+	if err == nil || !strings.Contains(err.Error(), "upstream status 402") {
+		t.Fatalf("err=%v", err)
+	}
+	if !strings.Contains(logBuf.String(), "x-request-id=req-http-9") || !strings.Contains(logBuf.String(), "status 402") {
+		t.Fatalf("log=%q", logBuf.String())
+	}
+}
+
+func waitClose(t *testing.T, closed <-chan string) string {
+	t.Helper()
+	select {
+	case got := <-closed:
+		return got
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for close")
+	}
+	return ""
+}
+
+func TestRunGuardedProxyMidStreamZeroOutputServerErrorRetriesOnce(t *testing.T) {
+	var calls int32
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-request-id", "req-srv")
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			_, _ = io.WriteString(w, sseMidStreamError("server_error", "upstream blew up"))
+			return
+		}
+		_, _ = io.WriteString(w, sampleSSEBody())
+	})
+	closed := make(chan string, 1)
+	var emits int32
+	installHostCaller(t, func(method string, request []byte) ([]byte, error) {
+		switch method {
+		case "host.stream.emit":
+			atomic.AddInt32(&emits, 1)
+		case "host.stream.close":
+			closed <- string(request)
+		}
+		return nil, nil
+	})
+	runGuardedProxy(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
+	got := waitClose(t, closed)
+	var req map[string]any
+	if err := json.Unmarshal([]byte(got), &req); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasErr := req["error"]; hasErr {
+		t.Fatalf("successful retry closed as error: %s", got)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("calls=%d want 2", calls)
+	}
+	if atomic.LoadInt32(&emits) < 1 {
+		t.Fatal("expected emitted content after retry")
+	}
+}
+
+func TestRunGuardedProxyMidStreamPermanentAndRateLimit(t *testing.T) {
+	cases := []struct {
+		name      string
+		code      string
+		wantCode  string
+		retryable bool
+	}{
+		{"context_length_exceeded", "context_length_exceeded", "context_length_exceeded", false},
+		{"content_filter", "content_filter", "content_filter", false},
+		{"rate_limit", "rate_limit", "rate_limit", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int32
+			cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&calls, 1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("x-request-id", "req-"+tc.code)
+				_, _ = io.WriteString(w, sseMidStreamError(tc.code, "official message"))
+			})
+			closed := make(chan string, 1)
+			var emits int32
+			installHostCaller(t, func(method string, request []byte) ([]byte, error) {
+				if method == "host.stream.emit" {
+					atomic.AddInt32(&emits, 1)
+				}
+				if method == "host.stream.close" {
+					closed <- string(request)
+				}
+				return nil, nil
+			})
+			runGuardedProxy(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
+			body := decodeCloseError(t, waitClose(t, closed))
+			if body.Error.Code != tc.wantCode {
+				t.Fatalf("code=%q", body.Error.Code)
+			}
+			assertRetryable(t, body.Error.Retryable, tc.retryable)
+			if atomic.LoadInt32(&calls) != 1 {
+				t.Fatalf("calls=%d want 1 (no fresh retry)", calls)
+			}
+			if atomic.LoadInt32(&emits) != 0 {
+				t.Fatalf("emits=%d want 0", emits)
+			}
+		})
+	}
+}
+
+func TestRunGuardedProxyMidStreamAfterEmitClosesErrorNoReplay(t *testing.T) {
+	var calls int32
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sseContentThenMidStreamError("partial", "server_error", "died mid way"))
+	})
+	closed := make(chan string, 1)
+	var emits int32
+	var sawErrorChunk int32
+	installHostCaller(t, func(method string, request []byte) ([]byte, error) {
+		if method == "host.stream.emit" {
+			atomic.AddInt32(&emits, 1)
+			if bytes.Contains(request, []byte(`"finish_reason":"error"`)) {
+				atomic.StoreInt32(&sawErrorChunk, 1)
+			}
+		}
+		if method == "host.stream.close" {
+			closed <- string(request)
+		}
+		return nil, nil
+	})
+	runGuardedProxy(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"), "cb", "sid")
+	body := decodeCloseError(t, waitClose(t, closed))
+	if body.Error.Code != "server_error" {
+		t.Fatalf("code=%q", body.Error.Code)
+	}
+	assertRetryable(t, body.Error.Retryable, true)
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("calls=%d want 1 (no replay after emit)", calls)
+	}
+	if atomic.LoadInt32(&emits) != 1 {
+		t.Fatalf("emits=%d want 1 content chunk", emits)
+	}
+	if atomic.LoadInt32(&sawErrorChunk) != 0 {
+		t.Fatal("error chunk was forwarded to the host")
+	}
+}
+
+func TestExecuteStreamCollectMidStream(t *testing.T) {
+	t.Run("zero_context_length", func(t *testing.T) {
+		var calls int32
+		cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, sseMidStreamError("context_length_exceeded", "too long"))
+		})
+		raw, err := executeStreamCollect(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := decodeEnvelope(t, raw)
+		if env.OK || env.Error == nil {
+			t.Fatalf("expected failure, got ok=%v", env.OK)
+		}
+		if env.Error.Code != "context_length_exceeded" || env.Error.HTTPStatus != http.StatusBadRequest {
+			t.Fatalf("envelope=%+v", env.Error)
+		}
+		assertRetryable(t, env.Error.Retryable, false)
+		if atomic.LoadInt32(&calls) != 1 {
+			t.Fatalf("calls=%d", calls)
+		}
+	})
+
+	t.Run("zero_server_error_retries", func(t *testing.T) {
+		var calls int32
+		cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			n := atomic.AddInt32(&calls, 1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			if n == 1 {
+				_, _ = io.WriteString(w, sseMidStreamError("server_error", "blip"))
+				return
+			}
+			_, _ = io.WriteString(w, sampleSSEBody())
+		})
+		raw, err := executeStreamCollect(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := decodeEnvelope(t, raw)
+		if !env.OK {
+			t.Fatalf("retry should succeed: %+v", env.Error)
+		}
+		if atomic.LoadInt32(&calls) != 2 {
+			t.Fatalf("calls=%d", calls)
+		}
+	})
+
+	t.Run("emitted_server_error_no_replay", func(t *testing.T) {
+		var calls int32
+		cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, sseContentThenMidStreamError("partial", "server_error", "died"))
+		})
+		raw, err := executeStreamCollect(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := decodeEnvelope(t, raw)
+		if env.OK || env.Error == nil || env.Error.Code != "server_error" {
+			t.Fatalf("envelope ok=%v err=%+v", env.OK, env.Error)
+		}
+		assertRetryable(t, env.Error.Retryable, true)
+		if atomic.LoadInt32(&calls) != 1 {
+			t.Fatalf("calls=%d", calls)
+		}
+	})
+
+	t.Run("rate_limit_no_immediate_retry", func(t *testing.T) {
+		var calls int32
+		cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, sseMidStreamError("rate_limit", "slow down"))
+		})
+		raw, err := executeStreamCollect(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := decodeEnvelope(t, raw)
+		if env.OK || env.Error == nil {
+			t.Fatal("expected failure")
+		}
+		if env.Error.Code != "rate_limit" || env.Error.HTTPStatus != http.StatusTooManyRequests {
+			t.Fatalf("envelope=%+v", env.Error)
+		}
+		assertRetryable(t, env.Error.Retryable, true)
+		if atomic.LoadInt32(&calls) != 1 {
+			t.Fatalf("calls=%d", calls)
+		}
+	})
+}
+
+func TestExecuteOnceForceStreamMidStreamContextLength(t *testing.T) {
+	cfg, _ := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sseMidStreamError("content_filter", "blocked"))
+	})
+	cfg.ForceStreamUpstream = testBool(true)
+	raw, err := executeOnce(context.Background(), cfg, credential{bearer: "t"}, executorPayload("m"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := decodeEnvelope(t, raw)
+	if env.OK || env.Error == nil || env.Error.Code != "content_filter" {
+		t.Fatalf("envelope ok=%v err=%+v", env.OK, env.Error)
+	}
+	assertRetryable(t, env.Error.Retryable, false)
 }

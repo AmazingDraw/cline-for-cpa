@@ -147,11 +147,7 @@ func stringFromMap(m map[string]any, keys ...string) string {
 func executeOnce(ctx context.Context, cfg pluginConfig, cred credential, payload []byte) ([]byte, error) {
 	body, status, err := upstreamCompletion(ctx, cfg, cred, payload)
 	if err != nil {
-		var se *streamStallError
-		if errors.As(err, &se) {
-			return StallEnvelope(se.stall), nil
-		}
-		return FailureEnvelope(ClassifyTransport(err)), nil
+		return completionFailureEnvelope(err), nil
 	}
 	// Upstream 401 with a subscription credential: force one refresh and retry,
 	// so an access token that expired mid-flight is invisible to the caller.
@@ -166,11 +162,7 @@ func executeOnce(ctx context.Context, cfg pluginConfig, cred credential, payload
 			refreshRecovered = true
 			body, status, err = upstreamCompletion(ctx, cfg, newCred, payload)
 			if err != nil {
-				var se *streamStallError
-				if errors.As(err, &se) {
-					return StallEnvelope(se.stall), nil
-				}
-				return FailureEnvelope(ClassifyTransport(err)), nil
+				return completionFailureEnvelope(err), nil
 			}
 			cred = newCred
 		}
@@ -281,7 +273,7 @@ func collectStreamOnce(ctx context.Context, cfg pluginConfig, cred credential, p
 	guard.Start()
 	defer guard.Disarm()
 
-	err = proxySSE(ctx, httpReq, guard, func(line []byte) error {
+	err = proxySSE(ctx, cfg, httpReq, guard, func(line []byte) error {
 		mu.Lock()
 		chunks = append(chunks, map[string]any{"Payload": append([]byte(nil), line...)})
 		mu.Unlock()
@@ -370,10 +362,7 @@ func executeStreamCollect(ctx context.Context, cfg pluginConfig, cred credential
 		return FailureEnvelope(ClassifyTransport(context.Canceled)), nil
 	}
 	if err != nil {
-		if status, ok := upstreamStatusOf(err); ok {
-			return FailureEnvelope(ClassifyUpstreamHTTPForSourceAfterRefresh(status, err.Error(), cred.source, refreshRecovered)), nil
-		}
-		return FailureEnvelope(ClassifyTransport(err)), nil
+		return FailureEnvelope(classifyProxyErr(err, cred, refreshRecovered)), nil
 	}
 	return okEnvelope(map[string]any{
 		"headers": map[string][]string{"content-type": {"text/event-stream"}},
@@ -407,7 +396,7 @@ func runGuardedProxy(parent context.Context, cfg pluginConfig, cred credential, 
 		defer guard.Disarm()
 
 		emitted := false
-		proxyErr := proxySSE(attemptCtx, httpReq, guard, func(line []byte) error {
+		proxyErr := proxySSE(attemptCtx, cfg, httpReq, guard, func(line []byte) error {
 			emitted = true
 			return emitHostChunk(callbackID, streamID, line)
 		})
@@ -458,12 +447,7 @@ func runGuardedProxy(parent context.Context, cfg pluginConfig, cred credential, 
 		return
 	}
 	if err != nil {
-		if status, ok := upstreamStatusOf(err); ok {
-			closeHostStream(callbackID, streamID, errors.New(errorBodyText(
-				ClassifyUpstreamHTTPForSourceAfterRefresh(status, err.Error(), cred.source, refreshRecovered))))
-			return
-		}
-		closeHostStream(callbackID, streamID, errors.New(errorBodyText(ClassifyTransport(err))))
+		closeHostStream(callbackID, streamID, errors.New(errorBodyText(classifyProxyErr(err, cred, refreshRecovered))))
 		return
 	}
 	closeHostStream(callbackID, streamID, nil)
@@ -484,10 +468,21 @@ func shouldRetryFreshConnection(stall *streamguard.StallError, err error, emitte
 	if err == nil {
 		return false
 	}
+	// Mid-stream server_error with zero output is the official transient case
+	// ("retry the full request"). Permanent codes and rate_limit must not be
+	// replayed here — rate_limit needs a cooldown, and the error string contains
+	// the substring "stream error", which the transport hints below would otherwise
+	// treat as a fresh-connection failure.
+	if me, ok := midStreamErrorOf(err); ok {
+		return me.Code == "server_error"
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "mid-stream error") {
+		return strings.Contains(msg, "(server_error)")
+	}
 	if status, ok := upstreamStatusOf(err); ok && status >= 400 && status < 500 {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
 	// Zero-output transport / transient stream failures only. Keep hints narrow:
 	// do not treat 401/4xx business errors as fresh-connection problems.
 	for _, hint := range []string{
@@ -511,16 +506,87 @@ func upstreamStatusOf(err error) (int, bool) {
 	return status, ok
 }
 
-func proxySSE(ctx context.Context, httpReq *http.Request, guard *streamguard.Guard, emit func([]byte) error) error {
+// midStreamProxyError is a finish_reason:"error" chunk observed on the streaming
+// path. It is not an HTTP failure: the response was already 200.
+type midStreamProxyError struct {
+	Code      string
+	Message   string
+	RequestID string
+}
+
+func newMidStreamProxyError(d midStreamErrorDetail, requestID string) *midStreamProxyError {
+	code := strings.TrimSpace(d.Code)
+	if code == "" {
+		code = "mid_stream_error"
+	}
+	msg := strings.TrimSpace(d.Message)
+	if msg == "" {
+		msg = "upstream error during generation"
+	}
+	return &midStreamProxyError{Code: code, Message: msg, RequestID: requestID}
+}
+
+func (e *midStreamProxyError) Error() string {
+	if e == nil {
+		return "upstream mid-stream error"
+	}
+	return fmt.Sprintf("upstream mid-stream error (%s): %s", e.Code, e.Message)
+}
+
+func midStreamErrorOf(err error) (*midStreamProxyError, bool) {
+	var me *midStreamProxyError
+	if errors.As(err, &me) && me != nil {
+		return me, true
+	}
+	return nil, false
+}
+
+func requestIDLabel(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return "(none)"
+	}
+	return id
+}
+
+// classifyProxyErr maps a proxySSE / transport error. Mid-stream codes win over
+// the generic stream classifier so permanent failures stay retryable:false.
+func classifyProxyErr(err error, cred credential, refreshRecovered bool) failure {
+	if me, ok := midStreamErrorOf(err); ok {
+		return classifyMidStream(me.Code, me.Message)
+	}
+	if status, ok := upstreamStatusOf(err); ok {
+		return ClassifyUpstreamHTTPForSourceAfterRefresh(status, err.Error(), cred.source, refreshRecovered)
+	}
+	return ClassifyTransport(err)
+}
+
+// completionFailureEnvelope classifies a non-streaming upstreamCompletion error.
+func completionFailureEnvelope(err error) []byte {
+	var se *streamStallError
+	if errors.As(err, &se) {
+		return StallEnvelope(se.stall)
+	}
+	if me, ok := midStreamErrorOf(err); ok {
+		return FailureEnvelope(classifyMidStream(me.Code, me.Message))
+	}
+	return FailureEnvelope(ClassifyTransport(err))
+}
+
+func proxySSE(ctx context.Context, cfg pluginConfig, httpReq *http.Request, guard *streamguard.Guard, emit func([]byte) error) error {
 	httpReq = httpReq.WithContext(ctx)
 	resp, err := upstreamClient().Do(httpReq)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	reqID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		logCredentialEvent(cfg, "chat/completions upstream status %d x-request-id=%s", resp.StatusCode, requestIDLabel(reqID))
 		return fmt.Errorf("upstream status %d: %s", resp.StatusCode, truncate(body, 512))
+	}
+	if reqID != "" {
+		pluginDebugf("chat/completions x-request-id=%s", reqID)
 	}
 	reader := bufio.NewReader(resp.Body)
 	var dataBuf bytes.Buffer
@@ -532,6 +598,14 @@ func proxySSE(ctx context.Context, httpReq *http.Request, guard *streamguard.Gua
 		data := append([]byte(nil), dataBuf.Bytes()...)
 		dataBuf.Reset()
 		guard.NoteInbound(ClassifySSEData(data))
+		if detail := parseMidStreamError(data); detail != nil {
+			me := newMidStreamProxyError(*detail, reqID)
+			logCredentialEvent(cfg, "chat/completions mid-stream error code=%s x-request-id=%s", me.Code, requestIDLabel(reqID))
+			// Do not emit the error chunk. Callers see a typed error and must not
+			// close the stream as success. Zero-output server_error may still be
+			// replayed once; anything already emitted is not.
+			return me
+		}
 		// Host wraps each emit as "data: <payload>\n\n" — send raw JSON / [DONE] only.
 		return emit(data)
 	}

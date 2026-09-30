@@ -2,6 +2,14 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.6 — 2026-09-30
+
+`defaultClientVersion` 0.0.36 → **0.0.39**（对齐今晚 live cache 的 desktop UA 兜底）。
+
+## 0.4.5 — 2026-09-30
+
+流式路径识别 `finish_reason:"error"`（复用 `midStreamErrorDetail`），不再当成功收尾。零输出：`server_error` fresh retry 一次；`context_length_exceeded` / `content_filter` 结构化失败且 `retryable:false`；`rate_limit` 按 429、`retryable:true`，不立即重试。已吐字则不重放，`host.stream.close` 带错误。`chat/completions` 失败与流内错误记录 `x-request-id`。402 文案指向 app.cline.bot。模型表刷新：免费池去掉 `cline-free/gemini-3.8-flash`（free+stealth 现为 5）。
+
 ## 0.4.4 — 2026-09-30
 
 审查修补：Stop 以 `parent.Err()` 优先于首轮 stall（避免重试中途取消被报成 504）；`shouldRetryFreshConnection` 排除 4xx（含 body 带 EOF 字样的 400）；collect 重试日志补 `fresh_retry=1`。
