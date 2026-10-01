@@ -60,10 +60,10 @@ func TestExposedModelsTiers(t *testing.T) {
 	if len(pass) < 11 {
 		t.Fatalf("clinePass models advertised = %d, want at least 11 (17 minus the 3 blacklisted)", len(pass))
 	}
-	// Floor tracks the live feed, not a historical peak. 2026-09-30 refresh
-	// dropped cline-free/gemini-3.8-flash (3 free + 2 stealth).
-	if len(free)+len(stealth) < 5 {
-		t.Fatalf("free/stealth models advertised = %d, want at least 5", len(free)+len(stealth))
+	// Floor tracks the live feed, not a historical peak. 2026-10-01 refresh
+	// dropped stealth/pixel-canary (3 free + 1 stealth).
+	if len(free)+len(stealth) < 4 {
+		t.Fatalf("free/stealth models advertised = %d, want at least 4", len(free)+len(stealth))
 	}
 	if !slices.Contains(stealth, "stealth/space-bunny-alpha") {
 		t.Fatalf("stealth/space-bunny-alpha missing from advertised models: %v", stealth)

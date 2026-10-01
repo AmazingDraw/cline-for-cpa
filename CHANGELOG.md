@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.7 — 2026-10-01
+
+模型表跟随上游：免费池去掉 `stealth/pixel-canary`（free+stealth 现为 4）；`cline-pass/glm-5.3` / `cline-cloud/glm-5.3` MaxOutputTokens 943717→943718。Desktop UA 兜底仍为 **0.0.39**（live cache 未变）。
+
+测试：`TestExposedModelsTiers` 免费池下限 5→4，跟 live feed。
+
 ## 0.4.6 — 2026-09-30
 
 `defaultClientVersion` 0.0.36 → **0.0.39**（对齐今晚 live cache 的 desktop UA 兜底）。
