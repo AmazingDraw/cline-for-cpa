@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.8 — 2026-10-06
+
+模型表跟随上游：免费池去掉 `stealth/space-bunny-alpha`、`cline-free/deepseek-v4.1-flash`（free+stealth 现为 2）；`openai/gpt-6-astra` / `openai/gpt-6.1-sol` Parameters 增 `verbosity`；`cline-free/mimo-v2.6-flash` / `cline-pass/mimo-v2.6-flash` Parameters 增 `logprobs`/`top_logprobs`。Desktop UA 兜底 **0.0.39→0.0.43**（对齐 live cache desktop）；CLI 仍走动态探测（cache cli **3.0.68**）。
+
+测试：`TestExposedModelsTiers` 免费池下限 4→2，去掉 stealth 钉死与已下架 free 模型。
+
 ## 0.4.7 — 2026-10-01
 
 模型表跟随上游：免费池去掉 `stealth/pixel-canary`（free+stealth 现为 4）；`cline-pass/glm-5.3` / `cline-cloud/glm-5.3` MaxOutputTokens 943717→943718。Desktop UA 兜底仍为 **0.0.39**（live cache 未变）。

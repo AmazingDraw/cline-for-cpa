@@ -25,7 +25,7 @@ import (
 // upstream see an incomplete client identity.
 const (
 	defaultClientType    = "cline-desktop"
-	defaultClientVersion = "0.0.39" // desktop UA fallback; bump when releasing the plugin
+	defaultClientVersion = "0.0.43" // desktop UA fallback; bump when releasing the plugin
 	defaultHTTPReferer   = "https://cline.bot"
 	defaultXTitle        = "Cline"
 	defaultMultiRoot     = "false"
@@ -70,7 +70,7 @@ func resolveClineHeaders(cfg pluginConfig) clineHeaders {
 
 	// Dynamic version auto-detection: if user explicitly configured client_version,
 	// that wins. Otherwise detect latest live version from npm/cache, falling back
-	// safely to defaultClientVersion (0.0.39).
+	// safely to defaultClientVersion (0.0.43).
 	baseVersion := bareVersion(cfg.ClientVersion)
 	if baseVersion == "" {
 		baseVersion = resolveLiveClientVersion(clientType, defaultClientVersion)
