@@ -24,11 +24,12 @@ import (
 // Earlier revisions of this plugin sent only the first four, which made the
 // upstream see an incomplete client identity.
 const (
-	defaultClientType    = "cline-desktop"
-	defaultClientVersion = "0.0.43" // desktop UA fallback; bump when releasing the plugin
-	defaultHTTPReferer   = "https://cline.bot"
-	defaultXTitle        = "Cline"
-	defaultMultiRoot     = "false"
+	defaultClientType       = "cline-desktop"
+	defaultClientVersion    = "0.0.91" // desktop UA fallback; bump to live latest on every plugin release
+	defaultCLIClientVersion = "3.0.69" // CLI UA fallback; bump to live latest on every plugin release
+	defaultHTTPReferer      = "https://cline.bot"
+	defaultXTitle           = "Cline"
+	defaultMultiRoot        = "false"
 )
 
 // clineHeaders is the resolved client-identity header set.
@@ -70,10 +71,15 @@ func resolveClineHeaders(cfg pluginConfig) clineHeaders {
 
 	// Dynamic version auto-detection: if user explicitly configured client_version,
 	// that wins. Otherwise detect latest live version from npm/cache, falling back
-	// safely to defaultClientVersion (0.0.43).
+	// to defaultClientVersion (desktop) or defaultCLIClientVersion (CLI).
 	baseVersion := bareVersion(cfg.ClientVersion)
 	if baseVersion == "" {
-		baseVersion = resolveLiveClientVersion(clientType, defaultClientVersion)
+		fallback := defaultClientVersion
+		ct := strings.ToLower(clientType)
+		if strings.HasSuffix(ct, "-cli") || ct == "cli" || strings.Contains(ct, "cline-cli") {
+			fallback = defaultCLIClientVersion
+		}
+		baseVersion = resolveLiveClientVersion(clientType, fallback)
 	}
 
 	h := clineHeaders{

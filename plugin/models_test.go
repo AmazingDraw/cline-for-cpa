@@ -22,6 +22,8 @@ func TestNormalizeModelKeepsFreeNamespace(t *testing.T) {
 		"cline-free/cline-pass/kimi-k3": {"cline-free/kimi-k3", "cline-free/kimi-k3"},
 		// vendor prefix in front of a model we publish is dropped
 		"deepseek/deepseek-v4.1-flash": {"cline-pass/deepseek-v4.1-flash", "cline-pass/deepseek-v4.1-flash"},
+		// cloud namespace is preserved (not rewritten to pass)
+		"cline-cloud/deepseek-v4.1-flash": {"cline-cloud/deepseek-v4.1-flash", "cline-cloud/deepseek-v4.1-flash"},
 		// unknown leaves still pass through, in their namespace
 		"cline-free/whatever-v9": {"cline-free/whatever-v9", "cline-free/whatever-v9"},
 	}
@@ -41,9 +43,9 @@ func TestNormalizeModelKeepsFreeNamespace(t *testing.T) {
 
 // Exposure is a **blacklist**: everything in a served namespace is advertised,
 // so a model Cline adds shows up on its own; only the excluded ids are hidden.
-// Unserved namespaces (recommended / cline-cloud) stay out.
+// Unserved namespaces (recommended / vendor ids) stay out; cline-cloud/ is served.
 func TestExposedModelsTiers(t *testing.T) {
-	var pass, free, stealth []string
+	var pass, free, stealth, cloud []string
 	for _, id := range StaticModelIDs() {
 		switch {
 		case strings.HasPrefix(id, namespacePass):
@@ -52,6 +54,8 @@ func TestExposedModelsTiers(t *testing.T) {
 			free = append(free, id)
 		case strings.HasPrefix(id, namespaceStealth):
 			stealth = append(stealth, id)
+		case strings.HasPrefix(id, namespaceCloud):
+			cloud = append(cloud, id)
 		default:
 			t.Fatalf("unexpected namespace in advertised list: %s", id)
 		}
@@ -64,6 +68,9 @@ func TestExposedModelsTiers(t *testing.T) {
 	if len(free)+len(stealth) < 3 {
 		t.Fatalf("free/stealth models advertised = %d, want at least 3", len(free)+len(stealth))
 	}
+	if len(cloud) < 1 {
+		t.Fatalf("cline-cloud models advertised = %d, want at least 1 (deepseek-v4.1-flash)", len(cloud))
+	}
 	// The blacklist is honoured (matched on the full id here)…
 	for _, banned := range []string{
 		"cline-pass/qwen3.8-max",
@@ -74,9 +81,8 @@ func TestExposedModelsTiers(t *testing.T) {
 			t.Fatalf("%s is blacklisted but still advertised", banned)
 		}
 	}
-	// …the unserved tiers stay out…
+	// …unserved vendor / recommended tiers stay out…
 	for _, banned := range []string{
-		"cline-cloud/kimi-k3",
 		"openai/gpt-6-astra",
 		"spacexai/grok-4.7",
 	} {
@@ -91,6 +97,8 @@ func TestExposedModelsTiers(t *testing.T) {
 		"cline-free/muse-spark-1.3-contributor",
 		"cline-pass/mimo-v2.6-pro",
 		"cline-pass/glm-5.3",
+		"cline-pass/deepseek-v4.1-flash",
+		"cline-cloud/deepseek-v4.1-flash",
 	} {
 		if _, ok := lookupModel(want); !ok {
 			t.Fatalf("missing advertised model %s", want)

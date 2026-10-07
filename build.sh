@@ -71,9 +71,91 @@ if [[ "${1:-}" == "--clean" ]]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# Force-align Desktop/CLI UA fallbacks with live latest before every build.
+# Prefer ~/.cli-proxy-api/data/cline-version-cache.json; also probe npm when
+# reachable. If hardcoded defaults lag the known latest, FAIL (not warn).
+# ---------------------------------------------------------------------------
+semver_lt() {
+  # true (0) iff $1 < $2 under version sort
+  local a="$1" b="$2"
+  [[ -z "$a" || -z "$b" ]] && return 1
+  [[ "$a" == "$b" ]] && return 1
+  [[ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)" == "$a" ]]
+}
+
+extract_go_string_const() {
+  # $1=file $2=const name → bare string value
+  sed -E -n "s/^[[:space:]]*${2}[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$1" | head -1
+}
+
+HEADERS_GO="$ROOT/plugin/cline_headers.go"
+DESKTOP_FALLBACK="$(extract_go_string_const "$HEADERS_GO" defaultClientVersion)"
+CLI_FALLBACK="$(extract_go_string_const "$HEADERS_GO" defaultCLIClientVersion)"
+if [[ -z "$DESKTOP_FALLBACK" || -z "$CLI_FALLBACK" ]]; then
+  echo "ERROR: cannot read defaultClientVersion / defaultCLIClientVersion from $HEADERS_GO" >&2
+  exit 1
+fi
+
+CACHE_JSON="${HOME}/.cli-proxy-api/data/cline-version-cache.json"
+CACHE_DESKTOP=""
+CACHE_CLI=""
+if [[ -f "$CACHE_JSON" ]]; then
+  # Prefer python for robust JSON; fall back to grep if unavailable.
+  if command -v python3 >/dev/null 2>&1; then
+    CACHE_DESKTOP="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('desktop',{}).get('version',''))" "$CACHE_JSON" 2>/dev/null || true)"
+    CACHE_CLI="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('cli',{}).get('version',''))" "$CACHE_JSON" 2>/dev/null || true)"
+  fi
+fi
+
+PROBE_DESKTOP=""
+PROBE_CLI=""
+if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  PROBE_CLI="$(curl -fsSL --max-time 5 "https://registry.npmjs.org/cline/latest" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)"
+  PROBE_DESKTOP="$(curl -fsSL --max-time 5 "https://registry.npmjs.org/@cline/core/latest" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)"
+fi
+
+pick_latest() {
+  local best=""
+  local v
+  for v in "$@"; do
+    [[ -z "$v" ]] && continue
+    if [[ -z "$best" ]] || semver_lt "$best" "$v"; then
+      best="$v"
+    fi
+  done
+  printf '%s' "$best"
+}
+
+REQ_DESKTOP="$(pick_latest "$CACHE_DESKTOP" "$PROBE_DESKTOP")"
+REQ_CLI="$(pick_latest "$CACHE_CLI" "$PROBE_CLI")"
+
+echo "client UA fallbacks: desktop=${DESKTOP_FALLBACK}  cli=${CLI_FALLBACK}"
+echo "live reference:      desktop=${REQ_DESKTOP:-?} (cache=${CACHE_DESKTOP:--} probe=${PROBE_DESKTOP:--})  cli=${REQ_CLI:-?} (cache=${CACHE_CLI:--} probe=${PROBE_CLI:--})"
+
+FAIL=0
+if [[ -n "$REQ_DESKTOP" ]] && semver_lt "$DESKTOP_FALLBACK" "$REQ_DESKTOP"; then
+  echo "ERROR: defaultClientVersion=${DESKTOP_FALLBACK} lags live desktop ${REQ_DESKTOP}." >&2
+  echo "       Update plugin/cline_headers.go defaultClientVersion to ${REQ_DESKTOP} before building." >&2
+  FAIL=1
+fi
+if [[ -n "$REQ_CLI" ]] && semver_lt "$CLI_FALLBACK" "$REQ_CLI"; then
+  echo "ERROR: defaultCLIClientVersion=${CLI_FALLBACK} lags live CLI ${REQ_CLI}." >&2
+  echo "       Update plugin/cline_headers.go defaultCLIClientVersion to ${REQ_CLI} before building." >&2
+  FAIL=1
+fi
+if [[ -z "$REQ_DESKTOP" && -z "$REQ_CLI" ]]; then
+  echo "ERROR: no live desktop/CLI version from cache or npm probe; cannot verify fallbacks." >&2
+  echo "       Ensure ${CACHE_JSON} exists or network reachability to registry.npmjs.org." >&2
+  FAIL=1
+fi
+if [[ "$FAIL" -ne 0 ]]; then
+  exit 1
+fi
+
 echo "building $OUT with $GO_BIN (GOOS=$OS GOARCH=$GOARCH)"
-echo "release fallbacks (do these when bumping the plugin, not live probes):"
-echo "  1. plugin/cline_headers.go  defaultClientVersion"
+echo "release checklist (also enforced above for client versions):"
+echo "  1. plugin/cline_headers.go  defaultClientVersion + defaultCLIClientVersion (= live latest)"
 echo "  2. go run ./tools/modelmeta && go run ./tools/modelmeta --check"
 CGO_ENABLED=1 GOOS="$OS" GOARCH="$GOARCH" "$GO_BIN" build -trimpath -buildmode=c-shared \
   -ldflags "-s -w -X cline-for-cpa/plugin.PluginVersion=${VERSION}" \

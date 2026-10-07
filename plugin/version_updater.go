@@ -26,7 +26,7 @@ import (
 // 3. Persistent disk snapshot (`~/.cli-proxy-api/data/cline-version-cache.json`)
 //    Automatically loaded on cold start so that even if the machine boots without
 //    internet, the baseline is already the latest version from previous online runs.
-// 4. Hardcoded baseline (`0.0.34`) as ultimate mechanical safety net.
+// 4. Hardcoded baseline (defaultClientVersion / defaultCLIClientVersion) as ultimate safety net.
 
 const (
 	versionCacheTTL    = 6 * time.Hour

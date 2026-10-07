@@ -5,11 +5,12 @@ import (
 	"strings"
 )
 
-// Cline exposes models under two namespaces. The prefix decides which upstream
+// Cline exposes models under several namespaces. The prefix decides which upstream
 // pool the request is billed against, so it must survive routing untouched:
 //
-//	cline-pass/…  the ClinePass subscription — usage counts against the plan
-//	cline-free/…  the free tier — per-model rate limit, no plan usage
+//	cline-pass/…   the ClinePass subscription — usage counts against the plan
+//	cline-free/…   the free tier — per-model rate limit, no plan usage
+//	cline-cloud/…  Cline Cloud usage-based pool (served selectively)
 //
 // Until 0.3.0 every id was rewritten to cline-pass/, which silently moved free
 // models into the subscription pool.
@@ -17,6 +18,7 @@ const (
 	namespacePass    = "cline-pass/"
 	namespaceFree    = "cline-free/"
 	namespaceStealth = "stealth/"
+	namespaceCloud   = "cline-cloud/"
 )
 
 // NormalizeModel resolves a client-supplied model id into
@@ -80,6 +82,11 @@ func splitNamespace(name string) (namespace, leaf string) {
 				namespace = namespaceStealth
 			}
 			name = name[len(namespaceStealth):]
+		case strings.HasPrefix(name, namespaceCloud):
+			if namespace == "" {
+				namespace = namespaceCloud
+			}
+			name = name[len(namespaceCloud):]
 		default:
 			return namespace, name
 		}
@@ -99,6 +106,9 @@ func knownLeaf(namespace, leaf string) bool {
 	if _, ok := lookupModel(namespaceFree + leaf); ok {
 		return true
 	}
-	_, ok := lookupModel(namespaceStealth + leaf)
+	if _, ok := lookupModel(namespaceStealth + leaf); ok {
+		return true
+	}
+	_, ok := lookupModel(namespaceCloud + leaf)
 	return ok
 }

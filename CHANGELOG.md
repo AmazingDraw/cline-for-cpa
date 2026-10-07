@@ -2,6 +2,14 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.10 — 2026-10-08
+
+暴露 `cline-cloud/deepseek-v4.1-flash`：将 `cline-cloud/` 纳入 `servedNamespaces`（与 pass/free/stealth 同黑名单暴露逻辑），`NormalizeModel` 保留 cloud 前缀（不再误改写到 pass）。`/v1/models` 与客户端可选列表可见该 id。
+
+客户端版本强制对齐：`defaultClientVersion` **0.0.43→0.0.91**，新增 `defaultCLIClientVersion` **3.0.69**（对齐本机 live cache / npm `@cline/core` + `cline`）。`build.sh` 构建前对照 cache 与 npm 探测；落后则**失败退出**（不再只 warn）。
+
+测试：`TestExposedModelsTiers` / `TestNormalizeModel*` / `TestStaticModelIDsNoAliases` 覆盖 cloud 暴露与命名空间保留。
+
 ## 0.4.9 — 2026-10-07
 
 模型表跟随上游：新增 `cline-free/solar-mini4`；去掉 `cline-cloud/glm-5.3`、`cline-cloud/kimi-k3`（25→24 行）；`cline-pass/minimax-m3` 仅排序变化。Desktop UA 兜底仍为 **0.0.43**（对齐 live cache desktop）；CLI 仍走动态探测（cache cli **3.0.68**）。
