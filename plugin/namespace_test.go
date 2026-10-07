@@ -4,12 +4,12 @@ import "testing"
 
 func TestNormalizeModelClinePassUpstream(t *testing.T) {
 	cases := map[string]string{
-		"cline-pass/deepseek-v4.1-flash": "cline-pass/deepseek-v4.1-flash",
-		"deepseek-v4.1-flash":            "cline-pass/deepseek-v4.1-flash",
-		"deepseek/deepseek-v4.1-flash":   "cline-pass/deepseek-v4.1-flash",
-		"cline-pass/kimi-k3":             "cline-pass/kimi-k3",
-		"kimi-k3":                        "cline-pass/kimi-k3",
-		"stealth/space-bunny-alpha":      "stealth/space-bunny-alpha",
+		"cline-pass/deepseek-v4.1-flash":  "cline-pass/deepseek-v4.1-flash",
+		"deepseek-v4.1-flash":             "cline-pass/deepseek-v4.1-flash",
+		"deepseek/deepseek-v4.1-flash":    "cline-pass/deepseek-v4.1-flash",
+		"cline-pass/kimi-k3":              "cline-pass/kimi-k3",
+		"kimi-k3":                         "cline-pass/kimi-k3",
+		"stealth/space-bunny-alpha":       "stealth/space-bunny-alpha",
 		"cline-cloud/deepseek-v4.1-flash": "cline-cloud/deepseek-v4.1-flash",
 	}
 	for in, want := range cases {
