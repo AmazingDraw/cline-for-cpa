@@ -59,10 +59,10 @@ func TestExposedModelsTiers(t *testing.T) {
 	if len(pass) < 11 {
 		t.Fatalf("clinePass models advertised = %d, want at least 11 (17 minus the 3 blacklisted)", len(pass))
 	}
-	// Floor tracks the live feed, not a historical peak. 2026-10-06 refresh
-	// dropped stealth/space-bunny-alpha and cline-free/deepseek-v4.1-flash (2 free + 0 stealth).
-	if len(free)+len(stealth) < 2 {
-		t.Fatalf("free/stealth models advertised = %d, want at least 2", len(free)+len(stealth))
+	// Floor tracks the live feed, not a historical peak. 2026-10-07 refresh
+	// added cline-free/solar-mini4 (3 free + 0 stealth).
+	if len(free)+len(stealth) < 3 {
+		t.Fatalf("free/stealth models advertised = %d, want at least 3", len(free)+len(stealth))
 	}
 	// The blacklist is honoured (matched on the full id here)…
 	for _, banned := range []string{
@@ -86,6 +86,7 @@ func TestExposedModelsTiers(t *testing.T) {
 	}
 	// …and everything else in a served namespace appears without a code change.
 	for _, want := range []string{
+		"cline-free/solar-mini4",
 		"cline-free/mimo-v2.6-flash",
 		"cline-free/muse-spark-1.3-contributor",
 		"cline-pass/mimo-v2.6-pro",

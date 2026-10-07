@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.9 — 2026-10-07
+
+模型表跟随上游：新增 `cline-free/solar-mini4`；去掉 `cline-cloud/glm-5.3`、`cline-cloud/kimi-k3`（25→24 行）；`cline-pass/minimax-m3` 仅排序变化。Desktop UA 兜底仍为 **0.0.43**（对齐 live cache desktop）；CLI 仍走动态探测（cache cli **3.0.68**）。
+
+测试：`TestExposedModelsTiers` 免费池下限 2→3（free+stealth 现为 3）。
+
 ## 0.4.8 — 2026-10-06
 
 模型表跟随上游：免费池去掉 `stealth/space-bunny-alpha`、`cline-free/deepseek-v4.1-flash`（free+stealth 现为 2）；`openai/gpt-6-astra` / `openai/gpt-6.1-sol` Parameters 增 `verbosity`；`cline-free/mimo-v2.6-flash` / `cline-pass/mimo-v2.6-flash` Parameters 增 `logprobs`/`top_logprobs`。Desktop UA 兜底 **0.0.39→0.0.43**（对齐 live cache desktop）；CLI 仍走动态探测（cache cli **3.0.68**）。
