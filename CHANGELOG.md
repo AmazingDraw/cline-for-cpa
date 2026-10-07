@@ -6,7 +6,7 @@
 
 模型表跟随上游：新增 `cline-free/solar-mini4`；去掉 `cline-cloud/glm-5.3`、`cline-cloud/kimi-k3`（25→24 行）；`cline-pass/minimax-m3` 仅排序变化。Desktop UA 兜底仍为 **0.0.43**（对齐 live cache desktop）；CLI 仍走动态探测（cache cli **3.0.68**）。
 
-测试：`TestExposedModelsTiers` 免费池下限 2→3（free+stealth 现为 3）。
+测试：`TestExposedModelsTiers` 免费池下限 2→3（free+stealth 现为 3）。`TestHandleMethodDispatchTable` 改写版本探测 URL 时持 `versionMu`（对齐 version_updater_test），消除 CI `go test -race` 与后台 updater 的竞态。
 
 ## 0.4.8 — 2026-10-06
 

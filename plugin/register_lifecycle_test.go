@@ -170,16 +170,22 @@ func TestRegistrationShape(t *testing.T) {
 
 func TestHandleMethodDispatchTable(t *testing.T) {
 	// Stub version probe URLs so plugin.register background fetch never hits public net.
+	versionMu.Lock()
 	prevGH, prevNPM := githubReleasesURL, npmRegistryBaseURL
+	versionMu.Unlock()
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(dead.Close)
+	versionMu.Lock()
 	githubReleasesURL = dead.URL + "/releases"
 	npmRegistryBaseURL = dead.URL
+	versionMu.Unlock()
 	t.Cleanup(func() {
+		versionMu.Lock()
 		githubReleasesURL = prevGH
 		npmRegistryBaseURL = prevNPM
+		versionMu.Unlock()
 	})
 
 	// Point active config BaseURL at dead server so models updater also stays local.
