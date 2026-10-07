@@ -30,7 +30,7 @@ const (
 //   - go run ./tools/modelmeta  → plugin/modelmeta_gen.go  (then --check)
 //
 // build.sh enforces defaultClientVersion / defaultCLIClientVersion ≥ live cache/probe.
-var PluginVersion = "0.4.10"
+var PluginVersion = "0.4.11"
 
 // HandleMethod is the plugin ABI dispatcher (mirrors cursor-for-cpa plugin.HandleMethod).
 func HandleMethod(method string, request []byte) ([]byte, error) {

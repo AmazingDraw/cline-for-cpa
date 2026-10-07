@@ -2,6 +2,14 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.11 — 2026-10-08
+
+不再暴露 `cline-cloud/deepseek-v4.1-flash`（试了提示没额度）：从 `servedNamespaces` 与 `isServedModelWithCatalog` 的 `clineCloud` tier 判定拿掉；`NormalizeModel` / `splitNamespace` 不再特判 cloud（未知前缀按既有 vendor/leaf 规则回退，通常落到 `cline-pass/`）。`modelmeta_gen.go` 仍可保留该行（上游 feed），但不广告。
+
+客户端 UA 兜底保持 **desktop 0.0.91** / **CLI 3.0.69**；`build.sh` live 对齐检查仍强制失败退出。
+
+测试：`TestExposedModelsTiers` / `TestStaticModelIDsNoAliases` 断言 cloud 不暴露；`TestNormalizeModel*` 去掉 cloud 保留用例。
+
 ## 0.4.10 — 2026-10-08
 
 暴露 `cline-cloud/deepseek-v4.1-flash`：将 `cline-cloud/` 纳入 `servedNamespaces`（与 pass/free/stealth 同黑名单暴露逻辑），`NormalizeModel` 保留 cloud 前缀（不再误改写到 pass）。`/v1/models` 与客户端可选列表可见该 id。

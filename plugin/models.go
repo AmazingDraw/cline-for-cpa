@@ -35,9 +35,9 @@ type Model struct {
 
 // servedNamespaces lists the tiers this plugin routes. Only namespaces whose
 // billing behaviour is verified end to end are exposed: cline-pass/ (subscription),
-// cline-free/ (free pool), stealth/ (experimental free pool), and cline-cloud/
-// (usage-based; currently deepseek-v4.1-flash from the catalog).
-var servedNamespaces = []string{namespacePass, namespaceFree, namespaceStealth, namespaceCloud}
+// cline-free/ (free pool), and stealth/ (experimental free pool).
+// cline-cloud/ stays in modelmeta (upstream feed) but is not served.
+var servedNamespaces = []string{namespacePass, namespaceFree, namespaceStealth}
 
 // excludedModels is the blacklist. Everything in a served namespace is exposed
 // by default. (Removed solar-pro4 since it was never in the official free tier).
@@ -138,7 +138,7 @@ func isServedModelWithCatalog(id string, catalog map[string]modelMeta) bool {
 		return true
 	}
 	if meta, ok := catalog[id]; ok {
-		if meta.Tier == "free" || meta.Tier == "clinePass" || meta.Tier == "clineCloud" {
+		if meta.Tier == "free" || meta.Tier == "clinePass" {
 			return true
 		}
 	}

@@ -4,13 +4,12 @@ import "testing"
 
 func TestNormalizeModelClinePassUpstream(t *testing.T) {
 	cases := map[string]string{
-		"cline-pass/deepseek-v4.1-flash":  "cline-pass/deepseek-v4.1-flash",
-		"deepseek-v4.1-flash":             "cline-pass/deepseek-v4.1-flash",
-		"deepseek/deepseek-v4.1-flash":    "cline-pass/deepseek-v4.1-flash",
-		"cline-pass/kimi-k3":              "cline-pass/kimi-k3",
-		"kimi-k3":                         "cline-pass/kimi-k3",
-		"stealth/space-bunny-alpha":       "stealth/space-bunny-alpha",
-		"cline-cloud/deepseek-v4.1-flash": "cline-cloud/deepseek-v4.1-flash",
+		"cline-pass/deepseek-v4.1-flash": "cline-pass/deepseek-v4.1-flash",
+		"deepseek-v4.1-flash":            "cline-pass/deepseek-v4.1-flash",
+		"deepseek/deepseek-v4.1-flash":   "cline-pass/deepseek-v4.1-flash",
+		"cline-pass/kimi-k3":             "cline-pass/kimi-k3",
+		"kimi-k3":                        "cline-pass/kimi-k3",
+		"stealth/space-bunny-alpha":      "stealth/space-bunny-alpha",
 	}
 	for in, want := range cases {
 		client, up, err := NormalizeModel(in)
@@ -31,11 +30,10 @@ func TestStaticModelIDsNoAliases(t *testing.T) {
 		}
 	}
 	want := map[string]bool{
-		"cline-pass/deepseek-v4.1-flash":  false,
-		"cline-pass/mimo-v2.6-flash":      false,
-		"cline-pass/mimo-v2.6-pro":        false,
-		"cline-pass/kimi-k3":              false,
-		"cline-cloud/deepseek-v4.1-flash": false,
+		"cline-pass/deepseek-v4.1-flash": false,
+		"cline-pass/mimo-v2.6-flash":     false,
+		"cline-pass/mimo-v2.6-pro":       false,
+		"cline-pass/kimi-k3":             false,
 	}
 	for _, id := range ids {
 		if _, ok := want[id]; ok {
