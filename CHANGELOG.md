@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.12 — 2026-10-14
+
+静态兜底对齐 live：desktop `@cline/core` **0.0.91 → 0.0.93**，CLI `cline` **3.0.69 → 3.0.71**。
+
+`modelmeta` 刷新：免费池新增 `cline-free/step-5-preview`（`solar-mini4` 仍在）；推荐层 `spacexai/grok-4.7` 换成 `google/gemini-4-argon`（不广告）。`cline-cloud/` 仍不广告。
+
 ## 0.4.11 — 2026-10-08
 
 不再暴露 `cline-cloud/deepseek-v4.1-flash`（试了提示没额度）：从 `servedNamespaces` 与 `isServedModelWithCatalog` 的 `clineCloud` tier 判定拿掉；`NormalizeModel` / `splitNamespace` 不再特判 cloud（未知前缀按既有 vendor/leaf 规则回退，通常落到 `cline-pass/`）。`modelmeta_gen.go` 仍可保留该行（上游 feed），但不广告。
