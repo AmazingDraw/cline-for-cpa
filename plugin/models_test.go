@@ -60,7 +60,7 @@ func TestExposedModelsTiers(t *testing.T) {
 		t.Fatalf("clinePass models advertised = %d, want at least 11 (17 minus the 3 blacklisted)", len(pass))
 	}
 	// Floor tracks the live feed, not a historical peak. 2026-10-14 refresh
-	// added cline-free/step-5-preview alongside solar-mini4.
+	// swapped step-5-preview for nemotron-3.5-super-vl (2026-10-16).
 	if len(free)+len(stealth) < 4 {
 		t.Fatalf("free/stealth models advertised = %d, want at least 4", len(free)+len(stealth))
 	}
@@ -86,7 +86,7 @@ func TestExposedModelsTiers(t *testing.T) {
 	}
 	// …and everything else in a served namespace appears without a code change.
 	for _, want := range []string{
-		"cline-free/step-5-preview",
+		"cline-free/nemotron-3.5-super-vl",
 		"cline-free/solar-mini4",
 		"cline-free/mimo-v2.6-flash",
 		"cline-free/muse-spark-1.3-contributor",

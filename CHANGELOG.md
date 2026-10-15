@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.13 — 2026-10-16
+
+`modelmeta` 刷新（25→25）：免费池去掉 `cline-free/step-5-preview`，新增 `cline-free/nemotron-3.5-super-vl`（nvidia，1M ctx）；若干行 `MaxOutputTokens` 随上游下调（943718→393216 / 131072）；`cline-pass/qwen3.7-max` 仅排序变化。 `cline-cloud/` 仍不广告：实测 `cline-cloud/deepseek-v4.1-flash` 上游 403（"This request is not supported."），同账号 `cline-pass/*` 正常，维持 0.4.11 不暴露。
+
+客户端 UA 兜底已是 live 最新：desktop `@cline/core` **0.0.93**，CLI `cline` **3.0.71**（不变）。
+
 ## 0.4.12 — 2026-10-14
 
 静态兜底对齐 live：desktop `@cline/core` **0.0.91 → 0.0.93**，CLI `cline` **3.0.69 → 3.0.71**。
