@@ -2,6 +2,14 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.14 — 2026-10-18
+
+`modelmeta --check` 分级：模型 id 增删（含换 namespace）、`Tier`、`Underlying`、`Input/OutputModalities`、`Parameters`（按集合比较）变化 → 硬失败 exit 1；仅排序变化、`ContextLength` / `MaxOutputTokens`、`DisplayName` / `Description` 变化 → 打印 WARN、exit 0（插件不用这些数值截断 `max_tokens`，只作为元数据广告，运行时也会从 live 刷新）。CI 的 `modelmeta-drift` 按退出码判定，workflow 不变。新增 `tools/modelmeta/drift_test.go`。
+
+`modelmeta` 刷新（25→25，id 集合不变）：`cline-pass/deepseek-v4.1-flash`、`cline-cloud/deepseek-v4.1-flash` `MaxOutputTokens` 393216→943718，`cline-pass/glm-5.3-flash` 131072→943718；`google/gemini-4-argon`、`cline-pass/deepseek-v4-pro`、`cline-pass/minimax-m3` 仅排序变化。免费池不变。`cline-cloud/` 仍不广告。
+
+客户端 UA 兜底对齐 live：desktop `@cline/core` **0.0.93 → 0.0.95**，CLI `cline` **3.0.71 → 3.0.73**。
+
 ## 0.4.13 — 2026-10-16
 
 `modelmeta` 刷新（25→25）：免费池去掉 `cline-free/step-5-preview`，新增 `cline-free/nemotron-3.5-super-vl`（nvidia，1M ctx）；若干行 `MaxOutputTokens` 随上游下调（943718→393216 / 131072）；`cline-pass/qwen3.7-max` 仅排序变化。 `cline-cloud/` 仍不广告：实测 `cline-cloud/deepseek-v4.1-flash` 上游 403（"This request is not supported."），同账号 `cline-pass/*` 正常，维持 0.4.11 不暴露。

@@ -16,7 +16,7 @@
 // Usage:
 //
 //	go run ./tools/modelmeta           # fetch and rewrite plugin/modelmeta_gen.go
-//	go run ./tools/modelmeta --check   # report drift without writing (exit 1 on drift)
+//	go run ./tools/modelmeta --check   # graded drift report, no write (exit 1 only on hard drift)
 //	go run ./tools/modelmeta --token sk_…   # bypass the local auth file
 package main
 
@@ -181,13 +181,7 @@ func main() {
 	}
 
 	if *check {
-		old, _ := os.ReadFile(*out)
-		if sameIgnoringTimestamp(string(old), generated) {
-			fmt.Printf("modelmeta: up to date (%d rows)\n", len(rows))
-			return
-		}
-		fmt.Fprintf(os.Stderr, "modelmeta: %s is stale — run `go run ./tools/modelmeta`\n", *out)
-		os.Exit(1)
+		os.Exit(runCheck(*out, rows, generated))
 	}
 
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
@@ -440,6 +434,40 @@ func render(rows []row) string {
 // generated file that changes between two fetches of identical data, so it is
 // stripped before --check compares — otherwise every run would look like drift.
 var refreshedLine = regexp.MustCompile(`(?m)^// Refreshed: .*\n`)
+
+// runCheck grades drift between the committed file and a fresh fetch and
+// returns the process exit code: 1 on hard drift, 0 otherwise (soft drift is
+// printed as WARN). See drift for the rules.
+func runCheck(path string, rows []row, generated string) int {
+	oldSrc, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "modelmeta: read %s: %v\n", path, err)
+		return 1
+	}
+	if sameIgnoringTimestamp(string(oldSrc), generated) {
+		fmt.Printf("modelmeta: up to date (%d rows)\n", len(rows))
+		return 0
+	}
+	old, err := parseGenerated(string(oldSrc))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "modelmeta: cannot parse %s (%v) — treating as hard drift\n", path, err)
+		return 1
+	}
+	d := compareCatalogs(old, rowsToCatalog(rows))
+	if len(d.hard) > 0 {
+		fmt.Fprintf(os.Stderr, "modelmeta: HARD drift in %s (%d hard, %d warn) — run `go run ./tools/modelmeta`\n%s",
+			path, len(d.hard), len(d.warn), formatDrift(d))
+		return 1
+	}
+	if len(d.warn) > 0 {
+		fmt.Fprintf(os.Stderr, "modelmeta: WARN soft drift only (%d) — exposure/routing unchanged; refresh at leisure\n%s",
+			len(d.warn), formatDrift(d))
+	} else {
+		fmt.Fprintf(os.Stderr, "modelmeta: WARN %s differs only in formatting — refresh at leisure\n", path)
+	}
+	fmt.Printf("modelmeta: no hard drift (%d rows)\n", len(rows))
+	return 0
+}
 
 func sameIgnoringTimestamp(a, b string) bool {
 	return refreshedLine.ReplaceAllString(a, "") == refreshedLine.ReplaceAllString(b, "")

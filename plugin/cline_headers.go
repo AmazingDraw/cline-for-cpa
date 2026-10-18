@@ -25,8 +25,8 @@ import (
 // upstream see an incomplete client identity.
 const (
 	defaultClientType       = "cline-desktop"
-	defaultClientVersion    = "0.0.93" // desktop UA fallback; bump to live latest on every plugin release
-	defaultCLIClientVersion = "3.0.71" // CLI UA fallback; bump to live latest on every plugin release
+	defaultClientVersion    = "0.0.95" // desktop UA fallback; bump to live latest on every plugin release
+	defaultCLIClientVersion = "3.0.73" // CLI UA fallback; bump to live latest on every plugin release
 	defaultHTTPReferer      = "https://cline.bot"
 	defaultXTitle           = "Cline"
 	defaultMultiRoot        = "false"
