@@ -30,7 +30,7 @@ const (
 //   - go run ./tools/modelmeta  → plugin/modelmeta_gen.go  (then --check)
 //
 // build.sh enforces defaultClientVersion / defaultCLIClientVersion ≥ live cache/probe.
-var PluginVersion = "0.4.14"
+var PluginVersion = "0.4.15"
 
 // HandleMethod is the plugin ABI dispatcher (mirrors cursor-for-cpa plugin.HandleMethod).
 func HandleMethod(method string, request []byte) ([]byte, error) {
@@ -111,7 +111,6 @@ func registration() map[string]any {
 			"GitHubRepository": "https://github.com/AmazingDraw/cline-for-cpa",
 			"Logo":             PluginLogo,
 			"ConfigFields": []map[string]any{
-				{"name": "base_url", "type": "string", "description": "Upstream OpenAI-compatible base (default https://api.cline.bot/api/v1)"},
 				{"name": "refresh_interval_seconds", "type": "number", "description": "Host refresh contract: seconds before expiry the host is told to poll this auth (default 600, 0 disables). Without it the host never refreshes cline proactively and the token is left to expire"},
 				{"name": "first_frame_timeout_seconds", "type": "number", "description": fmt.Sprintf("First-frame timeout (default %d)", cfg.FirstFrameTimeoutSeconds)},
 				{"name": "stream_silence_timeout_seconds", "type": "number", "description": fmt.Sprintf("Inbound silence timeout (default %d)", cfg.StreamSilenceTimeoutSeconds)},
@@ -245,10 +244,7 @@ func isPassAccountRemote(bearer string) bool {
 	}
 
 	cfg := currentConfig()
-	base := strings.TrimRight(cfg.BaseURL, "/")
-	if base == "" {
-		base = defaultBaseURL
-	}
+	base := clineBaseURL()
 	req, err := http.NewRequest(http.MethodGet, base+"/users/me/plan", nil)
 	if err != nil {
 		return false

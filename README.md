@@ -27,6 +27,7 @@ Disable a same-named `openai-compatibility` `cline-pass` proxy or Stream Guard i
 
 Defaults: first frame 60s / silence 120s / heartbeat-only 180s / `force_stream_upstream: true`.
 `profile: cli` switches identity headers. Source of truth: `plugin/config.go`.
+Upstream is fixed to `https://api.cline.bot/api/v1`; the `base_url` option was removed in 0.4.15 (a leftover key is silently ignored).
 
 ---
 

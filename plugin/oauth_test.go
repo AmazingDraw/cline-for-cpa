@@ -21,7 +21,8 @@ func TestWithWorkOSPrefix(t *testing.T) {
 }
 
 func TestResolveCredentialsNeverFallsBackToAPIKey(t *testing.T) {
-	cfg := pluginConfig{APIKey: "sk_fallback_test_key", BaseURL: "http://127.0.0.1:1", AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, "http://127.0.0.1:1")
+	cfg := pluginConfig{APIKey: "sk_fallback_test_key", AuthDir: t.TempDir()}
 	st := clineOAuthStorage{
 		Type:         ProviderKey,
 		AccessToken:  "expired-access",
@@ -43,7 +44,8 @@ func TestResolveCredentialsNeverFallsBackToAPIKey(t *testing.T) {
 }
 
 func TestResolveCredentialsKeepsValidAccessWithoutRefresh(t *testing.T) {
-	cfg := pluginConfig{APIKey: "sk_should_not_use", BaseURL: "http://127.0.0.1:1", AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, "http://127.0.0.1:1")
+	cfg := pluginConfig{APIKey: "sk_should_not_use", AuthDir: t.TempDir()}
 	st := clineOAuthStorage{
 		Type:         ProviderKey,
 		AccessToken:  "still-good",

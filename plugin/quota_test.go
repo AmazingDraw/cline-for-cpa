@@ -167,7 +167,8 @@ func TestFetchClinePlanAndUsageLimits(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := pluginConfig{BaseURL: srv.URL, ClientVersion: "0.0.34"}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{ClientVersion: "0.0.34"}
 	plan, err := fetchClinePlan(cfg, "tok")
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -190,7 +191,8 @@ func TestFetchClinePlanErrorPaths(t *testing.T) {
 			http.Error(w, "boom", http.StatusInternalServerError)
 		}))
 		defer srv.Close()
-		_, err := fetchClinePlan(pluginConfig{BaseURL: srv.URL}, "tok")
+		withUpstreamBaseURL(t, srv.URL)
+		_, err := fetchClinePlan(pluginConfig{}, "tok")
 		if err == nil || !strings.Contains(err.Error(), "plan HTTP 500") {
 			t.Fatalf("err=%v", err)
 		}
@@ -200,7 +202,8 @@ func TestFetchClinePlanErrorPaths(t *testing.T) {
 			_, _ = w.Write([]byte("not-json"))
 		}))
 		defer srv.Close()
-		_, err := fetchClinePlan(pluginConfig{BaseURL: srv.URL}, "tok")
+		withUpstreamBaseURL(t, srv.URL)
+		_, err := fetchClinePlan(pluginConfig{}, "tok")
 		if err == nil {
 			t.Fatal("expected unmarshal error")
 		}
@@ -210,11 +213,13 @@ func TestFetchClinePlanErrorPaths(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":false}`))
 		}))
 		defer srv.Close()
-		_, err := fetchClinePlan(pluginConfig{BaseURL: srv.URL}, "tok")
+		withUpstreamBaseURL(t, srv.URL)
+		_, err := fetchClinePlan(pluginConfig{}, "tok")
 		if err == nil || !strings.Contains(err.Error(), "unsuccessful") {
 			t.Fatalf("err=%v", err)
 		}
-		_, err = fetchClineUsageLimits(pluginConfig{BaseURL: srv.URL}, "tok")
+		withUpstreamBaseURL(t, srv.URL)
+		_, err = fetchClineUsageLimits(pluginConfig{}, "tok")
 		if err == nil || !strings.Contains(err.Error(), "unsuccessful") {
 			t.Fatalf("limits err=%v", err)
 		}
@@ -240,7 +245,8 @@ func TestHandleQuotaFetchNoCredentials(t *testing.T) {
 func TestHandleQuotaFetchAPIKeyIsRejected(t *testing.T) {
 	srv := newQuotaTestServer(t, http.StatusOK, true)
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\napi_key: sk_cfg\n", t.TempDir(), srv.URL))
+	withUpstreamBaseURL(t, srv.URL)
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\napi_key: sk_cfg\n", t.TempDir()))
 
 	raw, err := handleQuotaFetch([]byte(`{}`))
 	if err != nil {
@@ -255,7 +261,8 @@ func TestHandleQuotaFetchAPIKeyIsRejected(t *testing.T) {
 func TestHandleQuotaFetchStorageJSONAndCap(t *testing.T) {
 	srv := newQuotaTestServer(t, http.StatusOK, true)
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
+	withUpstreamBaseURL(t, srv.URL)
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\n", t.TempDir()))
 
 	storage, _ := json.Marshal(clineOAuthStorage{
 		Type:         ProviderKey,
@@ -285,7 +292,8 @@ func TestHandleQuotaFetchStorageJSONAndCap(t *testing.T) {
 func TestHandleQuotaFetchFreshOAuth(t *testing.T) {
 	srv := newQuotaTestServer(t, http.StatusOK, false)
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
+	withUpstreamBaseURL(t, srv.URL)
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\n", t.TempDir()))
 
 	storage, _ := json.Marshal(clineOAuthStorage{
 		Type:         ProviderKey,
@@ -309,7 +317,8 @@ func TestHandleQuotaFetchPlan404IsFreeTier(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"no plan"}`))
 	}))
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
+	withUpstreamBaseURL(t, srv.URL)
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\n", t.TempDir()))
 
 	storage, _ := json.Marshal(clineOAuthStorage{
 		Type:         ProviderKey,
@@ -342,7 +351,8 @@ func TestHandleQuotaFetchPlanError(t *testing.T) {
 		_, _ = w.Write([]byte("nope"))
 	}))
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
+	withUpstreamBaseURL(t, srv.URL)
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\n", t.TempDir()))
 
 	storage, _ := json.Marshal(clineOAuthStorage{
 		Type:         ProviderKey,
@@ -372,7 +382,8 @@ func TestHandleQuotaFetchReauthRequired(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
+	withUpstreamBaseURL(t, srv.URL)
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\n", t.TempDir()))
 
 	storage, _ := json.Marshal(clineOAuthStorage{
 		Type:         ProviderKey,
@@ -401,7 +412,8 @@ func TestHandleQuotaFetchOAuthRefreshTransient(t *testing.T) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\nbase_url: %q\n", t.TempDir(), srv.URL))
+	withUpstreamBaseURL(t, srv.URL)
+	applyTestConfig(t, fmt.Sprintf("auth_dir: %q\n", t.TempDir()))
 
 	storage, _ := json.Marshal(clineOAuthStorage{
 		Type:         ProviderKey,

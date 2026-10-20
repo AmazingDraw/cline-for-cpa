@@ -37,7 +37,7 @@ func withPlanServer(t *testing.T, status int, body string) pluginConfig {
 	t.Cleanup(func() { upstreamHTTPClientOverride = nil })
 
 	cfg := defaultConfig()
-	cfg.BaseURL = srv.URL
+	withUpstreamBaseURL(t, srv.URL)
 	cfg.AuthDir = t.TempDir()
 	cfg.ClientVersion = defaultClientVersion
 	configMu.Lock()
@@ -159,10 +159,13 @@ func TestRegistrationShape(t *testing.T) {
 	for _, f := range fields {
 		names[f["name"].(string)] = true
 	}
-	for _, want := range []string{"base_url", "refresh_interval_seconds", "first_frame_timeout_seconds"} {
+	for _, want := range []string{"refresh_interval_seconds", "first_frame_timeout_seconds"} {
 		if !names[want] {
 			t.Fatalf("missing field %s in %v", want, names)
 		}
+	}
+	if names["base_url"] {
+		t.Fatalf("base_url was removed in 0.4.15 and must not be advertised: %v", names)
 	}
 }
 
@@ -188,11 +191,11 @@ func TestHandleMethodDispatchTable(t *testing.T) {
 		versionMu.Unlock()
 	})
 
-	// Point active config BaseURL at dead server so models updater also stays local.
+	// Point the upstream base at the dead server so models updater also stays local.
 	configMu.Lock()
 	prevCfg := activeConfig
 	cfg := defaultConfig()
-	cfg.BaseURL = dead.URL
+	withUpstreamBaseURL(t, dead.URL)
 	cfg.AuthDir = t.TempDir()
 	cfg.ClientVersion = defaultClientVersion
 	activeConfig = cfg
@@ -298,7 +301,7 @@ func TestIsPassAccountRemoteTable(t *testing.T) {
 		configMu.Lock()
 		prev := activeConfig
 		cfg := defaultConfig()
-		cfg.BaseURL = "http://127.0.0.1:1"
+		withUpstreamBaseURL(t, "http://127.0.0.1:1")
 		cfg.ClientVersion = defaultClientVersion
 		activeConfig = cfg
 		configMu.Unlock()
@@ -327,7 +330,7 @@ func TestIsPassAccountRemoteTable(t *testing.T) {
 		configMu.Lock()
 		prev := activeConfig
 		cfg := defaultConfig()
-		cfg.BaseURL = srv.URL
+		withUpstreamBaseURL(t, srv.URL)
 		cfg.ClientVersion = defaultClientVersion
 		activeConfig = cfg
 		configMu.Unlock()
@@ -357,11 +360,11 @@ func TestIsPassAccountRemoteTable(t *testing.T) {
 
 	t.Run("empty_base_falls_back", func(t *testing.T) {
 		clearTierCache()
-		// Empty BaseURL → defaultBaseURL; override client to avoid public net.
+		// Empty upstream base → defaultBaseURL; override client to avoid public net.
 		configMu.Lock()
 		prev := activeConfig
 		cfg := defaultConfig()
-		cfg.BaseURL = ""
+		withUpstreamBaseURL(t, "")
 		cfg.ClientVersion = defaultClientVersion
 		activeConfig = cfg
 		configMu.Unlock()

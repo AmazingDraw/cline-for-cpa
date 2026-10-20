@@ -148,7 +148,7 @@ func triggerModelsRefresh() {
 	cfg := currentConfig()
 	token := firstAccessTokenFromDir(clineAuthDir(cfg))
 
-	snap, err := fetchLiveModelsSnapshot(cfg.BaseURL, token)
+	snap, err := fetchLiveModelsSnapshot(clineBaseURL(), token)
 	if err != nil {
 		return
 	}

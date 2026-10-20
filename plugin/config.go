@@ -48,7 +48,6 @@ type pluginConfig struct {
 	Enabled                           *bool    `yaml:"enabled" json:"enabled"`
 	APIKey                            string   `yaml:"api_key" json:"api_key"`
 	APIKeys                           []string `yaml:"api_keys" json:"api_keys"`
-	BaseURL                           string   `yaml:"base_url" json:"base_url"`
 	FirstFrameTimeoutSeconds          int      `yaml:"first_frame_timeout_seconds" json:"first_frame_timeout_seconds"`
 	StreamSilenceTimeoutSeconds       int      `yaml:"stream_silence_timeout_seconds" json:"stream_silence_timeout_seconds"`
 	StreamHeartbeatOnlyTimeoutSeconds int      `yaml:"stream_heartbeat_only_timeout_seconds" json:"stream_heartbeat_only_timeout_seconds"`
@@ -130,9 +129,30 @@ var (
 	activeConfig = defaultConfig()
 )
 
+// upstreamBaseURL is the Cline API base every request goes to. It is fixed to
+// defaultBaseURL: the former `base_url` config field was removed in 0.4.15, and
+// a leftover `base_url:` key in an old host config is silently ignored by the
+// YAML decoder (pluginConfig has no such field). Tests point it at httptest
+// via withUpstreamBaseURL; it is deliberately not reachable from config.
+var (
+	upstreamBaseMu  sync.RWMutex
+	upstreamBaseURL = defaultBaseURL
+)
+
+// clineBaseURL returns the upstream base without a trailing slash.
+func clineBaseURL() string {
+	upstreamBaseMu.RLock()
+	base := upstreamBaseURL
+	upstreamBaseMu.RUnlock()
+	base = strings.TrimRight(base, "/")
+	if base == "" {
+		return defaultBaseURL
+	}
+	return base
+}
+
 func defaultConfig() pluginConfig {
 	return pluginConfig{
-		BaseURL:                           defaultBaseURL,
 		FirstFrameTimeoutSeconds:          int(streamguard.DefaultFirstFrame / time.Second),
 		StreamSilenceTimeoutSeconds:       int(streamguard.DefaultSilence / time.Second),
 		StreamHeartbeatOnlyTimeoutSeconds: int(streamguard.DefaultHeartbeatOnly / time.Second),
@@ -184,9 +204,6 @@ func applyConfig(raw []byte) error {
 		}
 		if len(incoming.APIKeys) > 0 {
 			cfg.APIKeys = incoming.APIKeys
-		}
-		if incoming.BaseURL != "" {
-			cfg.BaseURL = incoming.BaseURL
 		}
 		if incoming.FirstFrameTimeoutSeconds > 0 {
 			cfg.FirstFrameTimeoutSeconds = incoming.FirstFrameTimeoutSeconds

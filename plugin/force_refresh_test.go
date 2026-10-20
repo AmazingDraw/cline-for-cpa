@@ -80,7 +80,8 @@ func TestForceRefreshExchangesWhenDiskDiffersInNonTokenFields(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	cfg := pluginConfig{AuthDir: dir, BaseURL: srv.URL}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: dir}
 	email := "force@example.com"
 	// Disk holds the same (rejected) bearer but a stale refresh token.
 	writeAuthFile(t, dir, email, map[string]any{
@@ -113,7 +114,8 @@ func TestForceRefreshAdoptsNewerUsableDiskCredential(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	cfg := pluginConfig{AuthDir: dir, BaseURL: srv.URL}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: dir}
 	email := "force@example.com"
 	writeAuthFile(t, dir, email, map[string]any{
 		"type": "cline", "access_token": "workos:FRESH-FROM-CLI", "refresh_token": "rt-disk",
@@ -144,7 +146,8 @@ func TestForceRefreshExchangesWhenDiskBearerIsStale(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	cfg := pluginConfig{AuthDir: dir, BaseURL: srv.URL}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: dir}
 	email := "force@example.com"
 	writeAuthFile(t, dir, email, map[string]any{
 		"type": "cline", "access_token": "workos:ALSO-DEAD", "refresh_token": "rt-disk",
@@ -172,7 +175,8 @@ func TestForceRefreshWithoutNewBearerIsLogged(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	cfg := pluginConfig{AuthDir: dir, BaseURL: srv.URL}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: dir}
 	email := "force@example.com"
 	writeAuthFile(t, dir, email, map[string]any{
 		"type": "cline", "access_token": "workos:DEAD", "refresh_token": "rt-disk",
@@ -200,7 +204,8 @@ func TestForceRefreshWithoutNewBearerIsLogged(t *testing.T) {
 // instead of silently travelling upstream.
 func TestStaleBearerWithoutRefreshTokenIsWarned(t *testing.T) {
 	dir := t.TempDir()
-	cfg := pluginConfig{AuthDir: dir, BaseURL: "http://127.0.0.1:1/api/v1"}
+	withUpstreamBaseURL(t, "http://127.0.0.1:1/api/v1")
+	cfg := pluginConfig{AuthDir: dir}
 	resetThrottledLogs()
 	t.Cleanup(resetThrottledLogs)
 

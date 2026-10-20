@@ -47,7 +47,8 @@ func TestTransientFailureNeedsGraceToKeepToken(t *testing.T) {
 	defer srv.Close()
 
 	// 10s left + transient failure → below the official grace → do not keep.
-	cfg := pluginConfig{BaseURL: srv.URL, AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: t.TempDir()}
 	nearExpiry := clineOAuthStorage{
 		Type: ProviderKey, AccessToken: "almost-gone", RefreshToken: "rt",
 		ExpiresAt: time.Now().Add(10 * time.Second).UnixMilli(),
@@ -131,7 +132,8 @@ func TestRefreshDoesNotResurrectReplacedCredential(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := pluginConfig{BaseURL: srv.URL, AuthDir: dir}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: dir}
 	if _, err := ensureFreshOAuth(cfg, &baseline); err == nil {
 		t.Fatal("refresh must fail when the credential was replaced underneath it")
 	}

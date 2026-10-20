@@ -144,10 +144,7 @@ type clinePlanEnvelope struct {
 }
 
 func fetchClinePlan(cfg pluginConfig, bearer string) (*clinePlanEnvelope, error) {
-	base := strings.TrimRight(cfg.BaseURL, "/")
-	if base == "" {
-		base = defaultBaseURL
-	}
+	base := clineBaseURL()
 	req, err := http.NewRequest(http.MethodGet, base+"/users/me/plan", nil)
 	if err != nil {
 		return nil, err
@@ -186,10 +183,7 @@ type clineUsageLimitsEnvelope struct {
 }
 
 func fetchClineUsageLimits(cfg pluginConfig, bearer string) (*clineUsageLimitsEnvelope, error) {
-	base := strings.TrimRight(cfg.BaseURL, "/")
-	if base == "" {
-		base = defaultBaseURL
-	}
+	base := clineBaseURL()
 	req, err := http.NewRequest(http.MethodGet, base+"/users/me/plan/usage-limits", nil)
 	if err != nil {
 		return nil, err

@@ -176,10 +176,7 @@ func refreshClineOAuth(cfg pluginConfig, refreshToken string) (*clineOAuthStorag
 	if refreshToken == "" {
 		return nil, fmt.Errorf("empty refresh token")
 	}
-	base := strings.TrimRight(cfg.BaseURL, "/")
-	if base == "" {
-		base = defaultBaseURL
-	}
+	base := clineBaseURL()
 	body, _ := json.Marshal(map[string]string{
 		"refreshToken": refreshToken,
 		"grantType":    "refresh_token",

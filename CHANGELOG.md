@@ -2,6 +2,14 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.15 — 2026-10-20
+
+移除 `base_url` 配置：宿主设置页不再显示「Upstream OpenAI-compatible base」，上游固定 `https://api.cline.bot/api/v1`（`pluginConfig.BaseURL`、`ConfigFields` 条目、`applyConfig` 合并逻辑删除；`executor` / `oauth` / `device_oauth` / `quota` / `models_updater` / pass 探测统一走 `clineBaseURL()`）。旧配置里残留的 `base_url:` 被 YAML 解码静默忽略，不报错、不影响其他字段（`TestLegacyBaseURLConfigIgnored`）。测试改用未导出的 `upstreamBaseURL` + `withUpstreamBaseURL` 测试 hook 指向 httptest。
+
+`modelmeta` 刷新（25→27）：免费池 4→5，新增 `cline-free/minimax-m3.1-flash`（minimax，1M ctx / 524288 out）；新增 `cline-pass/deepseek-v4.1-flash-1017`（DeepSeek V4.1 Flash 10-17 快照，1M ctx / 393216 out），`cline-pass/deepseek-v4.1-flash` 仍保留；`google/gemini-4-argon` `MaxOutputTokens` 65536→943718（推荐层，不广告）。`cline-cloud/` 仍不广告。
+
+客户端 UA 兜底已是 live 最新：desktop `@cline/core` **0.0.95**，CLI `cline` **3.0.73**（不变）。
+
 ## 0.4.14 — 2026-10-18
 
 `modelmeta --check` 分级：模型 id 增删（含换 namespace）、`Tier`、`Underlying`、`Input/OutputModalities`、`Parameters`（按集合比较）变化 → 硬失败 exit 1；仅排序变化、`ContextLength` / `MaxOutputTokens`、`DisplayName` / `Description` 变化 → 打印 WARN、exit 0（插件不用这些数值截断 `max_tokens`，只作为元数据广告，运行时也会从 live 刷新）。CI 的 `modelmeta-drift` 按退出码判定，workflow 不变。新增 `tools/modelmeta/drift_test.go`。

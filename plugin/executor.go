@@ -659,7 +659,7 @@ func proxySSE(ctx context.Context, cfg pluginConfig, httpReq *http.Request, guar
 }
 
 func newUpstreamRequest(ctx context.Context, cfg pluginConfig, apiKey string, payload []byte, stream bool) (*http.Request, error) {
-	base := strings.TrimRight(cfg.BaseURL, "/")
+	base := clineBaseURL()
 	url := base + "/chat/completions"
 	body := payload
 	if stream {

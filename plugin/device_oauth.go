@@ -169,10 +169,7 @@ func pollWorkOSDeviceOnce(clientID, deviceCode string) (access, refresh string, 
 }
 
 func registerClineWorkOSTokens(cfg pluginConfig, workosAccess, workosRefresh string) (*clineOAuthStorage, error) {
-	base := strings.TrimRight(cfg.BaseURL, "/")
-	if base == "" {
-		base = defaultBaseURL
-	}
+	base := clineBaseURL()
 	body, _ := json.Marshal(map[string]string{
 		"accessToken":  workosAccess,
 		"refreshToken": workosRefresh,

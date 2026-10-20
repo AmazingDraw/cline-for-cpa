@@ -73,7 +73,7 @@ func withTestUpstream(t *testing.T, h http.HandlerFunc) (pluginConfig, *httptest
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	cfg := defaultConfig()
-	cfg.BaseURL = srv.URL
+	withUpstreamBaseURL(t, srv.URL)
 	cfg.AuthDir = t.TempDir()
 	cfg.ClientVersion = defaultClientVersion
 	cfg.ForceStreamUpstream = testBool(false)
@@ -291,7 +291,7 @@ func TestLogModelRouteThrottled(t *testing.T) {
 
 func TestNewUpstreamRequest(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.BaseURL = "http://example.invalid/v1/"
+	withUpstreamBaseURL(t, "http://example.invalid/v1/")
 	cfg.ClientVersion = defaultClientVersion
 	req, err := newUpstreamRequest(context.Background(), cfg, "tok", []byte(`{"model":"m"}`), true)
 	if err != nil {
@@ -471,7 +471,7 @@ func TestProxySSEEmitError(t *testing.T) {
 
 func TestProxySSEDialError(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.BaseURL = "http://127.0.0.1:1" // nothing listening
+	withUpstreamBaseURL(t, "http://127.0.0.1:1") // nothing listening
 	cfg.ClientVersion = defaultClientVersion
 	upstreamHTTPClientOverride = &http.Client{Timeout: 200 * time.Millisecond}
 	t.Cleanup(func() { upstreamHTTPClientOverride = nil })
@@ -565,7 +565,7 @@ func TestExecuteOnceUpstream4xx(t *testing.T) {
 
 func TestExecuteOnceTransportError(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.BaseURL = "http://127.0.0.1:1"
+	withUpstreamBaseURL(t, "http://127.0.0.1:1")
 	cfg.ClientVersion = defaultClientVersion
 	cfg.ForceStreamUpstream = testBool(false)
 	upstreamHTTPClientOverride = &http.Client{Timeout: 200 * time.Millisecond}
@@ -986,9 +986,10 @@ func TestHandleExecuteTable(t *testing.T) {
 		}
 	})
 	// Point global config at httptest so handleExecute's currentConfig() works.
+	withUpstreamBaseURL(t, srv.URL)
 	if err := applyConfig([]byte(fmt.Sprintf(
-		"base_url: %q\nauth_dir: %q\nclient_version: %q\nforce_stream_upstream: false\n",
-		srv.URL, cfg.AuthDir, defaultClientVersion,
+		"auth_dir: %q\nclient_version: %q\nforce_stream_upstream: false\n",
+		cfg.AuthDir, defaultClientVersion,
 	))); err != nil {
 		t.Fatal(err)
 	}
@@ -1092,9 +1093,10 @@ func TestHandleExecuteInvalidPayload(t *testing.T) {
 	cfg, srv := withTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(sampleJSONCompletion())
 	})
+	withUpstreamBaseURL(t, srv.URL)
 	if err := applyConfig([]byte(fmt.Sprintf(
-		"base_url: %q\nauth_dir: %q\nclient_version: %q\nforce_stream_upstream: false\n",
-		srv.URL, cfg.AuthDir, defaultClientVersion,
+		"auth_dir: %q\nclient_version: %q\nforce_stream_upstream: false\n",
+		cfg.AuthDir, defaultClientVersion,
 	))); err != nil {
 		t.Fatal(err)
 	}

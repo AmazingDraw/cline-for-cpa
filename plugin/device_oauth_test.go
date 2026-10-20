@@ -12,7 +12,7 @@ import (
 )
 
 // withWorkOSTestServer mounts WorkOS-shaped endpoints under workOSAPIBaseURL
-// and optionally Cline register under cfg.BaseURL (same server).
+// and optionally Cline register under the upstream base (same server).
 func withWorkOSTestServer(t *testing.T, h http.HandlerFunc) (pluginConfig, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(h)
@@ -26,7 +26,7 @@ func withWorkOSTestServer(t *testing.T, h http.HandlerFunc) (pluginConfig, *http
 	t.Cleanup(func() { upstreamHTTPClientOverride = nil })
 
 	cfg := defaultConfig()
-	cfg.BaseURL = srv.URL
+	withUpstreamBaseURL(t, srv.URL)
 	cfg.AuthDir = t.TempDir()
 	cfg.ClientVersion = defaultClientVersion
 	return cfg, srv
@@ -461,7 +461,7 @@ func TestRegisterClineWorkOSTokensTable(t *testing.T) {
 
 func TestRegisterClineWorkOSTokensDialError(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.BaseURL = "http://127.0.0.1:1"
+	withUpstreamBaseURL(t, "http://127.0.0.1:1")
 	cfg.ClientVersion = defaultClientVersion
 	upstreamHTTPClientOverride = &http.Client{Timeout: 200 * time.Millisecond}
 	t.Cleanup(func() { upstreamHTTPClientOverride = nil })
@@ -472,12 +472,12 @@ func TestRegisterClineWorkOSTokensDialError(t *testing.T) {
 }
 
 func TestRegisterClineWorkOSTokensEmptyBaseURL(t *testing.T) {
-	// Empty BaseURL falls back to defaultBaseURL — point WorkOS override unused;
+	// Empty upstream base falls back to defaultBaseURL — point WorkOS override unused;
 	// force dial fail on default by overriding client only (won't hit real net if
 	// DefaultClient dial fails to resolve? defaultBaseURL is public — use override
 	// client that always fails).
 	cfg := defaultConfig()
-	cfg.BaseURL = ""
+	withUpstreamBaseURL(t, "")
 	cfg.ClientVersion = defaultClientVersion
 	upstreamHTTPClientOverride = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, io.EOF
@@ -722,9 +722,9 @@ func TestHandleAuthLoginPollTable(t *testing.T) {
 				w.WriteHeader(404)
 			}
 		})
-		// currentConfig().BaseURL must be the test server
+		// the upstream base must be the test server
 		cfg := defaultConfig()
-		cfg.BaseURL = workOSAPIBaseURL
+		withUpstreamBaseURL(t, workOSAPIBaseURL)
 		cfg.AuthDir = t.TempDir()
 		cfg.ClientVersion = defaultClientVersion
 		configMu.Lock()

@@ -96,7 +96,8 @@ func TestApplyConfigKeepsHeaderOverrides(t *testing.T) {
 // --- credential precedence: OAuth must not be hijacked by api_key ---
 
 func TestOAuthBearerBeatsAPIKeyInSameAuthFile(t *testing.T) {
-	cfg := pluginConfig{APIKey: "sk_should_not_win", BaseURL: "http://127.0.0.1:1", AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, "http://127.0.0.1:1")
+	cfg := pluginConfig{APIKey: "sk_should_not_win", AuthDir: t.TempDir()}
 	st := clineOAuthStorage{
 		Type:         ProviderKey,
 		AccessToken:  "fresh-access",
@@ -126,7 +127,8 @@ func TestInvalidGrantReportsReauthRequired(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := pluginConfig{BaseURL: srv.URL, AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: t.TempDir()}
 	st := clineOAuthStorage{
 		Type:         ProviderKey,
 		AccessToken:  "expired-access",
@@ -147,7 +149,8 @@ func TestTransientRefreshFailureKeepsValidToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := pluginConfig{BaseURL: srv.URL, AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: t.TempDir()}
 	st := clineOAuthStorage{
 		Type:         ProviderKey,
 		AccessToken:  "still-usable",
@@ -181,7 +184,8 @@ func TestSingleFlightCoalescesConcurrentRefreshes(t *testing.T) {
 	srv := refreshTestServer(t, &calls, 150*time.Millisecond)
 	defer srv.Close()
 
-	cfg := pluginConfig{BaseURL: srv.URL, AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: t.TempDir()}
 	st := &clineOAuthStorage{
 		Type:         ProviderKey,
 		AccessToken:  "expired",
@@ -259,7 +263,8 @@ func TestRefreshReusesRotationFromDisk(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	cfg := pluginConfig{BaseURL: srv.URL, AuthDir: dir}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: dir}
 	email := "rotate@example.com"
 	// Another holder already rotated the credential on disk.
 	onDisk := clineOAuthStorage{
@@ -313,7 +318,8 @@ func TestForceRefreshCredentialReportsChange(t *testing.T) {
 	srv := refreshTestServer(t, &calls, 0)
 	defer srv.Close()
 
-	cfg := pluginConfig{BaseURL: srv.URL, AuthDir: t.TempDir()}
+	withUpstreamBaseURL(t, srv.URL)
+	cfg := pluginConfig{AuthDir: t.TempDir()}
 	st := &clineOAuthStorage{
 		Type: ProviderKey, AccessToken: "old", RefreshToken: "live", Email: "a@b.c",
 		ExpiresAt: time.Now().Add(30 * time.Minute).UnixMilli(),

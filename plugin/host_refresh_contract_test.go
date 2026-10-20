@@ -233,7 +233,8 @@ func TestClassify401AfterRefresh(t *testing.T) {
 // reach the upstream at all (connection refused) while the cached token is
 // already expired: the correct answer is 503 + retryable, NOT 401.
 func TestAuthRefreshTransientFailureIsRetryable503(t *testing.T) {
-	applyTestConfig(t, `{"auth_dir": "`+t.TempDir()+`", "base_url": "http://127.0.0.1:1/api/v1"}`)
+	withUpstreamBaseURL(t, "http://127.0.0.1:1/api/v1")
+	applyTestConfig(t, `{"auth_dir": "`+t.TempDir()+`"}`)
 	env := refreshAuthForTest(t, clineStorageForTest(-time.Minute))
 
 	if env.OK || env.Error == nil {
@@ -261,7 +262,8 @@ func TestAuthRefreshRejectedTokenRequiresReauth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	applyTestConfig(t, `{"auth_dir": "`+t.TempDir()+`", "base_url": "`+server.URL+`"}`)
+	withUpstreamBaseURL(t, server.URL)
+	applyTestConfig(t, `{"auth_dir": "`+t.TempDir()+`"}`)
 	env := refreshAuthForTest(t, clineStorageForTest(-time.Minute))
 
 	if env.OK || env.Error == nil {
