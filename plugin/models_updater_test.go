@@ -80,7 +80,7 @@ func TestDynamicModelsDiscoveryFallback(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	customModelsPath = filepath.Join(tmpDir, "models-cache.json")
-	defer func() { customModelsPath = "" }()
+	defer func() { customModelsPath = testDefaultModelsPath }()
 
 	// Initially disk is empty, exposedModels should contain static models
 	exposed := exposedModels()

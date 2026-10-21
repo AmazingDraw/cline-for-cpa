@@ -304,14 +304,8 @@ func setDiscoveryHeaders(req *http.Request, token string) {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.Header.Set("User-Agent", "Cline/"+defaultClientVersion)
-	req.Header.Set("X-Client-Type", "cline-desktop")
-	req.Header.Set("X-Client-Version", defaultClientVersion)
-	req.Header.Set("X-Platform", "desktop")
-	req.Header.Set("X-Platform-Version", defaultClientVersion)
-	req.Header.Set("X-Core-Version", defaultClientVersion)
-	req.Header.Set("HTTP-Referer", defaultHTTPReferer)
-	req.Header.Set("X-Title", defaultXTitle)
+	// Same identity as chat requests (one source of truth for versions).
+	applyClineHeaders(req, currentConfig())
 }
 
 func int64Field(m map[string]any, key string) int64 {

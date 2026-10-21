@@ -15,18 +15,22 @@ import (
 
 // Dynamic Client Version Engine for Cline with Disk Snapshot Persistence.
 //
-// Aligned with official sources:
-// - Desktop releases: GitHub API (repos/cline/cline/releases -> desktop-v*)
-//   Fallback to NPM (@cline/core) or hardcoded baseline.
-// - CLI releases: NPM registry (cline package -> dist-tags.latest).
+// Three independent versions, one cache key + probe each (see cline_headers.go
+// for the official sources):
 //
-// Multi-tier Fallback & Self-Evolution:
-// 1. User config in config.yaml (`client_version`) -> ALWAYS highest precedence.
-// 2. In-memory dynamic cache (TTL 6 hours).
-// 3. Persistent disk snapshot (`~/.cli-proxy-api/data/cline-version-cache.json`)
-//    Automatically loaded on cold start so that even if the machine boots without
-//    internet, the baseline is already the latest version from previous online runs.
-// 4. Hardcoded baseline (defaultClientVersion / defaultCLIClientVersion) as ultimate safety net.
+//	desktop  Cline Desktop app   GitHub releases tag desktop-v*   fallback defaultClientVersion
+//	cli      Cline CLI           npm `cline` dist-tags.latest     fallback defaultCLIClientVersion
+//	core     @cline/core         npm `@cline/core` latest         fallback defaultCoreVersion
+//
+// The desktop probe has NO npm fallback: @cline/core is a different version
+// line (0.0.95 while Desktop is 0.0.48), and mixing them was the 0.4.15 bug.
+//
+// Precedence for each header value:
+//  1. Explicit config (`client_version` / `core_version`) — always wins.
+//  2. max(cache, compiled fallback) by version order. The cache (memory, TTL 6h,
+//     persisted to `~/.cli-proxy-api/data/cline-version-cache.json`) lets a running
+//     plugin follow upstream without a rebuild; the max() keeps a stale cache
+//     from downgrading a freshly built fallback. build.sh enforces fallback ≥ live.
 
 const (
 	versionCacheTTL    = 6 * time.Hour
@@ -35,11 +39,12 @@ const (
 
 	targetKeyDesktop = "desktop"
 	targetKeyCLI     = "cli"
+	targetKeyCore    = "core"
 )
 
 // Overridable in tests (httptest) so version probes never hit the public internet.
 var (
-	githubReleasesURL  = "https://api.github.com/repos/cline/cline/releases?per_page=10"
+	githubReleasesURL  = "https://api.github.com/repos/cline/cline/releases?per_page=30"
 	npmRegistryBaseURL = "https://registry.npmjs.org"
 )
 
@@ -134,32 +139,86 @@ func saveVersionSnapshotToDisk() {
 	}
 }
 
-// resolveLiveClientVersion returns the dynamically detected version for the clientType/profile,
-// with multi-level fallback (Memory -> Disk Snapshot -> Hardcoded Baseline).
-func resolveLiveClientVersion(clientType, fallback string) string {
+// scheduleVersionRefresh starts at most one background refresh per key. It is
+// a variable so tests can turn background probes off: a goroutine outliving
+// its test would race with later tests that swap the shared HTTP client.
+var scheduleVersionRefresh = func(key string) {
+	if _, busy := refreshing.LoadOrStore(key, struct{}{}); busy {
+		return
+	}
+	go func() {
+		defer refreshing.Delete(key)
+		refreshVersionInBackground(key)
+	}()
+}
+
+var refreshing sync.Map
+
+// resolveLiveVersion returns max(cache[key], fallback). A stale or missing
+// cache entry schedules a background refresh but never blocks the caller.
+func resolveLiveVersion(key, fallback string) string {
 	diskLoadedOnce.Do(loadVersionSnapshotFromDisk)
 
-	targetKey := targetKeyDesktop
-	ct := strings.ToLower(clientType)
-	if strings.HasSuffix(ct, "-cli") || ct == "cli" || strings.Contains(ct, "cline-cli") {
-		targetKey = targetKeyCLI
-	}
-
 	versionMu.RLock()
-	entry, ok := versionCache[targetKey]
+	entry, ok := versionCache[key]
 	versionMu.RUnlock()
 
-	if ok && entry.Version != "" && time.Since(entry.FetchedAt) < versionCacheTTL {
-		return entry.Version
+	if !ok || entry.Version == "" || time.Since(entry.FetchedAt) >= versionCacheTTL {
+		scheduleVersionRefresh(key)
 	}
-
-	// Trigger async background refresh if expired or not yet cached
-	go refreshVersionInBackground(targetKey)
-
-	if ok && entry.Version != "" {
+	if ok && entry.Version != "" && compareVersions(entry.Version, fallback) > 0 {
 		return entry.Version
 	}
 	return fallback
+}
+
+// compareVersions orders dotted numeric versions ("0.0.48" < "0.0.95" <
+// "0.1.0"). A pre-release suffix ("1.2.3-alpha") sorts below the release.
+func compareVersions(a, b string) int {
+	split := func(v string) ([]int, bool) {
+		v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+		pre := false
+		if i := strings.IndexAny(v, "-+"); i >= 0 {
+			pre = v[i] == '-'
+			v = v[:i]
+		}
+		var out []int
+		for _, part := range strings.Split(v, ".") {
+			n := 0
+			for _, c := range part {
+				if c < '0' || c > '9' {
+					break
+				}
+				n = n*10 + int(c-'0')
+			}
+			out = append(out, n)
+		}
+		return out, pre
+	}
+	x, xp := split(a)
+	y, yp := split(b)
+	for i := 0; i < len(x) || i < len(y); i++ {
+		var xi, yi int
+		if i < len(x) {
+			xi = x[i]
+		}
+		if i < len(y) {
+			yi = y[i]
+		}
+		if xi != yi {
+			if xi < yi {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case xp && !yp:
+		return -1
+	case !xp && yp:
+		return 1
+	}
+	return 0
 }
 
 // refreshVersionInBackground fetches the latest version without blocking callers.
@@ -181,15 +240,18 @@ func refreshVersionInBackground(targetKey string) {
 	var ver string
 	var err error
 
-	if targetKey == targetKeyCLI {
+	switch targetKey {
+	case targetKeyCLI:
 		ver, err = fetchLatestNpmVersion("cline")
-	} else {
-		// For desktop, primary source is GitHub releases (desktop-v*)
+	case targetKeyCore:
+		ver, err = fetchLatestNpmVersion("@cline/core")
+	case targetKeyDesktop:
+		// Desktop app version comes only from GitHub desktop-v* tags. There is
+		// deliberately no npm fallback (@cline/core is a different version line);
+		// on failure the cache/fallback keeps serving.
 		ver, err = fetchLatestDesktopReleaseVersion()
-		if err != nil || !isPlausibleVersion(ver) {
-			// Fallback: npm @cline/core
-			ver, err = fetchLatestNpmVersion("@cline/core")
-		}
+	default:
+		return
 	}
 
 	if err == nil && isPlausibleVersion(ver) {
@@ -300,6 +362,7 @@ func StartVersionUpdater() {
 		go func() {
 			refreshVersionInBackground(targetKeyDesktop)
 			refreshVersionInBackground(targetKeyCLI)
+			refreshVersionInBackground(targetKeyCore)
 		}()
 	})
 }

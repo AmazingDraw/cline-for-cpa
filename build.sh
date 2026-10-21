@@ -72,9 +72,17 @@ if [[ "${1:-}" == "--clean" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Force-align Desktop/CLI UA fallbacks with live latest before every build.
-# Prefer ~/.cli-proxy-api/data/cline-version-cache.json; also probe npm when
-# reachable. If hardcoded defaults lag the known latest, FAIL (not warn).
+# Force-align the three identity-version fallbacks with live latest before
+# every build. The runtime sends max(cache, fallback) for each one, so a
+# fallback that lags live means a fresh install can send a stale identity.
+# Each fallback is checked against THE SAME source the runtime uses:
+#
+#   defaultClientVersion     Desktop app   GitHub tag desktop-v*  + cache "desktop"
+#   defaultCLIClientVersion  CLI           npm `cline`            + cache "cli"
+#   defaultCoreVersion       X-Core-Version npm `@cline/core`     + cache "core"
+#
+# Any fallback behind its live reference, or any source with no reference at
+# all (cache missing AND probe failed), is a hard failure (exit 1).
 # ---------------------------------------------------------------------------
 semver_lt() {
   # true (0) iff $1 < $2 under version sort
@@ -92,27 +100,46 @@ extract_go_string_const() {
 HEADERS_GO="$ROOT/plugin/cline_headers.go"
 DESKTOP_FALLBACK="$(extract_go_string_const "$HEADERS_GO" defaultClientVersion)"
 CLI_FALLBACK="$(extract_go_string_const "$HEADERS_GO" defaultCLIClientVersion)"
-if [[ -z "$DESKTOP_FALLBACK" || -z "$CLI_FALLBACK" ]]; then
-  echo "ERROR: cannot read defaultClientVersion / defaultCLIClientVersion from $HEADERS_GO" >&2
+CORE_FALLBACK="$(extract_go_string_const "$HEADERS_GO" defaultCoreVersion)"
+if [[ -z "$DESKTOP_FALLBACK" || -z "$CLI_FALLBACK" || -z "$CORE_FALLBACK" ]]; then
+  echo "ERROR: cannot read defaultClientVersion / defaultCLIClientVersion / defaultCoreVersion from $HEADERS_GO" >&2
   exit 1
 fi
 
 CACHE_JSON="${HOME}/.cli-proxy-api/data/cline-version-cache.json"
-CACHE_DESKTOP=""
-CACHE_CLI=""
-if [[ -f "$CACHE_JSON" ]]; then
-  # Prefer python for robust JSON; fall back to grep if unavailable.
-  if command -v python3 >/dev/null 2>&1; then
-    CACHE_DESKTOP="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('desktop',{}).get('version',''))" "$CACHE_JSON" 2>/dev/null || true)"
-    CACHE_CLI="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('cli',{}).get('version',''))" "$CACHE_JSON" 2>/dev/null || true)"
-  fi
-fi
+cache_field() {
+  [[ -f "$CACHE_JSON" ]] || return 0
+  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],{}).get('version',''))" "$CACHE_JSON" "$1" 2>/dev/null || true
+}
+CACHE_DESKTOP="$(cache_field desktop)"
+CACHE_CLI="$(cache_field cli)"
+CACHE_CORE="$(cache_field core)"
 
+npm_latest() {
+  curl -fsSL --max-time 5 "https://registry.npmjs.org/$1/latest" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true
+}
+github_desktop_latest() {
+  # First desktop-v* tag in the newest releases (same API the runtime probes).
+  # GITHUB_TOKEN, if set, only raises the rate limit; it is never printed.
+  local auth=()
+  [[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  curl -fsSL --max-time 8 "${auth[@]}" -H "Accept: application/vnd.github.v3+json" \
+    "https://api.github.com/repos/cline/cline/releases?per_page=30" 2>/dev/null \
+    | python3 -c "
+import sys,json
+for r in json.load(sys.stdin):
+    t=r.get('tag_name','')
+    if t.startswith('desktop-v'):
+        print(t[len('desktop-v'):]); break" 2>/dev/null || true
+}
 PROBE_DESKTOP=""
 PROBE_CLI=""
+PROBE_CORE=""
 if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-  PROBE_CLI="$(curl -fsSL --max-time 5 "https://registry.npmjs.org/cline/latest" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)"
-  PROBE_DESKTOP="$(curl -fsSL --max-time 5 "https://registry.npmjs.org/@cline/core/latest" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)"
+  PROBE_DESKTOP="$(github_desktop_latest)"
+  PROBE_CLI="$(npm_latest cline)"
+  PROBE_CORE="$(npm_latest @cline/core)"
 fi
 
 pick_latest() {
@@ -129,33 +156,38 @@ pick_latest() {
 
 REQ_DESKTOP="$(pick_latest "$CACHE_DESKTOP" "$PROBE_DESKTOP")"
 REQ_CLI="$(pick_latest "$CACHE_CLI" "$PROBE_CLI")"
+REQ_CORE="$(pick_latest "$CACHE_CORE" "$PROBE_CORE")"
 
-echo "client UA fallbacks: desktop=${DESKTOP_FALLBACK}  cli=${CLI_FALLBACK}"
-echo "live reference:      desktop=${REQ_DESKTOP:-?} (cache=${CACHE_DESKTOP:--} probe=${PROBE_DESKTOP:--})  cli=${REQ_CLI:-?} (cache=${CACHE_CLI:--} probe=${PROBE_CLI:--})"
+echo "identity fallbacks: desktop=${DESKTOP_FALLBACK}  cli=${CLI_FALLBACK}  core=${CORE_FALLBACK}"
+echo "live reference:     desktop=${REQ_DESKTOP:-?} (cache=${CACHE_DESKTOP:--} github=${PROBE_DESKTOP:--})"
+echo "                    cli=${REQ_CLI:-?} (cache=${CACHE_CLI:--} npm=${PROBE_CLI:--})"
+echo "                    core=${REQ_CORE:-?} (cache=${CACHE_CORE:--} npm=${PROBE_CORE:--})"
 
 FAIL=0
-if [[ -n "$REQ_DESKTOP" ]] && semver_lt "$DESKTOP_FALLBACK" "$REQ_DESKTOP"; then
-  echo "ERROR: defaultClientVersion=${DESKTOP_FALLBACK} lags live desktop ${REQ_DESKTOP}." >&2
-  echo "       Update plugin/cline_headers.go defaultClientVersion to ${REQ_DESKTOP} before building." >&2
-  FAIL=1
-fi
-if [[ -n "$REQ_CLI" ]] && semver_lt "$CLI_FALLBACK" "$REQ_CLI"; then
-  echo "ERROR: defaultCLIClientVersion=${CLI_FALLBACK} lags live CLI ${REQ_CLI}." >&2
-  echo "       Update plugin/cline_headers.go defaultCLIClientVersion to ${REQ_CLI} before building." >&2
-  FAIL=1
-fi
-if [[ -z "$REQ_DESKTOP" && -z "$REQ_CLI" ]]; then
-  echo "ERROR: no live desktop/CLI version from cache or npm probe; cannot verify fallbacks." >&2
-  echo "       Ensure ${CACHE_JSON} exists or network reachability to registry.npmjs.org." >&2
-  FAIL=1
-fi
+check_fallback() {
+  # $1=label $2=const $3=fallback $4=required
+  if [[ -z "$4" ]]; then
+    echo "ERROR: no live ${1} version (cache missing and probe failed); cannot verify ${2}." >&2
+    FAIL=1
+  elif semver_lt "$3" "$4"; then
+    echo "ERROR: ${2}=${3} lags live ${1} ${4}. Update plugin/cline_headers.go ${2} to ${4}." >&2
+    FAIL=1
+  fi
+}
+check_fallback desktop defaultClientVersion "$DESKTOP_FALLBACK" "$REQ_DESKTOP"
+check_fallback cli defaultCLIClientVersion "$CLI_FALLBACK" "$REQ_CLI"
+check_fallback core defaultCoreVersion "$CORE_FALLBACK" "$REQ_CORE"
 if [[ "$FAIL" -ne 0 ]]; then
   exit 1
+fi
+if [[ "${CHECK_UA_ONLY:-0}" == "1" ]]; then
+  echo "identity versions OK (CHECK_UA_ONLY=1, not building)"
+  exit 0
 fi
 
 echo "building $OUT with $GO_BIN (GOOS=$OS GOARCH=$GOARCH)"
 echo "release checklist (also enforced above for client versions):"
-echo "  1. plugin/cline_headers.go  defaultClientVersion + defaultCLIClientVersion (= live latest)"
+echo "  1. plugin/cline_headers.go  defaultClientVersion + defaultCLIClientVersion + defaultCoreVersion (= live latest)"
 echo "  2. go run ./tools/modelmeta && go run ./tools/modelmeta --check"
 CGO_ENABLED=1 GOOS="$OS" GOARCH="$GOARCH" "$GO_BIN" build -trimpath -buildmode=c-shared \
   -ldflags "-s -w -X cline-for-cpa/plugin.PluginVersion=${VERSION}" \

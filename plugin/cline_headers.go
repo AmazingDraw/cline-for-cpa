@@ -1,35 +1,52 @@
 package plugin
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // Client identity headers, aligned with the official builder
 //
-//	@cline/llms  src/providers/cline-client-headers.ts  → buildClineClientHeaders()
+//	cline/cline sdk/packages/llms/src/providers/request-headers.ts
+//	  → buildClineRequestHeaders()   (called from @cline/core local-runtime-bootstrap.ts
+//	                                   and hub-runtime-host.ts with coreVersion = @cline/core package.json version)
 //
-// which emits (bundled form in dist/providers.js, function cC):
+//	HTTP-Referer, X-Title   : static
+//	User-Agent              : "Cline/<client.version>"
+//	X-CLIENT-TYPE           : client.name ?? "cline-<source>"
+//	X-CLIENT-VERSION        : client.version
+//	X-PLATFORM              : client.platform ?? source
+//	X-PLATFORM-VERSION      : client.platformVersion ?? client.version
+//	X-CORE-VERSION          : @cline/core package version   ← independent of the client version
+//	X-IS-MULTIROOT          : client.isMultiRoot ? "true" : "false"
+//	X-Task-ID               : session id (omitted when there is none)
 //
-//	HTTP-Referer, X-Title              : static
-//	User-Agent                         : "Cline/<client.version>"
-//	X-CLIENT-TYPE                      : client.name ?? "cline-<source>"   (cline-desktop|cline-cli|cline-sdk)
-//	X-CLIENT-VERSION                   : client.version
-//	X-PLATFORM                         : client.platform ?? source         (desktop|cli|vscode)
-//	X-PLATFORM-VERSION                 : client.platformVersion ?? version
-//	X-CORE-VERSION                     : core version
-//	X-IS-MULTIROOT                     : client.isMultiRoot ? "true" : "false"
-//	X-Task-ID                          : client session id
+// Who the "client" is (apps/*/client identity):
 //
-// Earlier revisions of this plugin sent only the first four, which made the
-// upstream see an incomplete client identity.
+//	Desktop  apps/examples/desktop-app/sidecar/client-context.ts
+//	         name "cline-desktop", platform "Cline Desktop",
+//	         version = platformVersion = desktop app package.json (git tag desktop-v<ver>)
+//	CLI      apps/cli/src/utils/cline-client-identity.ts
+//	         name "cline-cli", platform "cli", version = CLI build (npm `cline`, tag cli-v<ver>)
+//
+// So there are THREE independent versions, each with its own fallback, cache
+// key and probe (see version_updater.go): desktop app, CLI, and @cline/core.
 const (
-	defaultClientType       = "cline-desktop"
-	defaultClientVersion    = "0.0.95" // desktop UA fallback; bump to live latest on every plugin release
-	defaultCLIClientVersion = "3.0.73" // CLI UA fallback; bump to live latest on every plugin release
-	defaultHTTPReferer      = "https://cline.bot"
-	defaultXTitle           = "Cline"
-	defaultMultiRoot        = "false"
+	defaultClientType = "cline-desktop"
+	// defaultClientVersion is the Cline Desktop app version (GitHub tag desktop-v*).
+	// It is NOT the @cline/core npm version. Bump to live latest on every release.
+	defaultClientVersion = "0.0.48"
+	// defaultCLIClientVersion is the Cline CLI version (npm `cline`, tag cli-v*).
+	defaultCLIClientVersion = "3.0.73"
+	// defaultCoreVersion is the @cline/core npm version, sent as X-Core-Version.
+	defaultCoreVersion = "0.0.95"
+	// desktopPlatform is the X-Platform value the official Desktop sends.
+	desktopPlatform    = "Cline Desktop"
+	defaultHTTPReferer = "https://cline.bot"
+	defaultXTitle      = "Cline"
+	defaultMultiRoot   = "false"
 )
 
 // clineHeaders is the resolved client-identity header set.
@@ -66,20 +83,25 @@ func resolveClineHeaders(cfg pluginConfig) clineHeaders {
 			clientType = "cline-cli"
 		}
 	case "desktop":
-		profilePlatform = "desktop"
+		profilePlatform = desktopPlatform
 	}
 
-	// Dynamic version auto-detection: if user explicitly configured client_version,
-	// that wins. Otherwise detect latest live version from npm/cache, falling back
-	// to defaultClientVersion (desktop) or defaultCLIClientVersion (CLI).
+	// Client version: explicit client_version wins; otherwise the newer of the
+	// live cache and the compiled-in fallback for this client kind (desktop app
+	// or CLI). A stale cache can therefore never downgrade a fresh build.
 	baseVersion := bareVersion(cfg.ClientVersion)
 	if baseVersion == "" {
-		fallback := defaultClientVersion
-		ct := strings.ToLower(clientType)
-		if strings.HasSuffix(ct, "-cli") || ct == "cli" || strings.Contains(ct, "cline-cli") {
-			fallback = defaultCLIClientVersion
+		key, fallback := targetKeyDesktop, defaultClientVersion
+		if isCLIClientType(clientType) {
+			key, fallback = targetKeyCLI, defaultCLIClientVersion
 		}
-		baseVersion = resolveLiveClientVersion(clientType, fallback)
+		baseVersion = resolveLiveVersion(key, fallback)
+	}
+	// Core version is independent of the client version (official X-CORE-VERSION
+	// is the @cline/core package version for both Desktop and CLI).
+	coreVersion := bareVersion(cfg.CoreVersion)
+	if coreVersion == "" {
+		coreVersion = resolveLiveVersion(targetKeyCore, defaultCoreVersion)
 	}
 
 	h := clineHeaders{
@@ -92,19 +114,28 @@ func resolveClineHeaders(cfg pluginConfig) clineHeaders {
 
 	h.Platform = firstNonEmpty(cfg.Platform, profilePlatform, platformFromClientType(h.ClientType))
 	h.PlatformVer = bareVersion(firstNonEmpty(cfg.PlatformVersion, h.Version))
-	h.CoreVersion = bareVersion(firstNonEmpty(cfg.CoreVersion, h.Version))
+	h.CoreVersion = coreVersion
 	h.IsMultiRoot = firstNonEmpty(cfg.IsMultiRoot, defaultMultiRoot)
 	return h
 }
 
-// platformFromClientType mirrors the official `cline-<source>` convention.
+// isCLIClientType reports whether the client type names the Cline CLI.
+func isCLIClientType(clientType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(clientType))
+	return strings.HasSuffix(ct, "-cli") || ct == "cli" || strings.Contains(ct, "cline-cli")
+}
+
+// platformFromClientType mirrors the official client identities: Desktop sends
+// "Cline Desktop", the CLI sends "cli"; anything else follows the SDK's
+// `cline-<source>` → `<source>` convention.
 func platformFromClientType(clientType string) string {
 	ct := strings.ToLower(strings.TrimSpace(clientType))
+	switch ct {
+	case "", "cline-desktop", "desktop":
+		return desktopPlatform
+	}
 	if strings.HasPrefix(ct, "cline-") {
 		return strings.TrimPrefix(ct, "cline-")
-	}
-	if ct == "" {
-		return "desktop"
 	}
 	return ct
 }
@@ -128,5 +159,28 @@ func applyClineHeaders(req *http.Request, cfg pluginConfig) {
 		// The official client sends its session id here; we only send it when a
 		// task id is configured, since a fabricated one would be misleading.
 		req.Header.Set("X-Task-ID", h.TaskID)
+	}
+	logIdentityOnChange(h)
+}
+
+var (
+	identityLogMu   sync.Mutex
+	lastIdentityLog string
+)
+
+// logIdentityOnChange writes the (non-secret) identity header set to the plugin
+// log once per distinct value, so the versions actually sent upstream can be
+// verified after a deploy without packet capture.
+func logIdentityOnChange(h clineHeaders) {
+	line := fmt.Sprintf("client identity User-Agent=Cline/%s X-Client-Type=%s X-Client-Version=%s X-Platform=%q X-Platform-Version=%s X-Core-Version=%s X-IS-MULTIROOT=%s",
+		h.Version, h.ClientType, h.Version, h.Platform, h.PlatformVer, h.CoreVersion, h.IsMultiRoot)
+	identityLogMu.Lock()
+	changed := line != lastIdentityLog
+	if changed {
+		lastIdentityLog = line
+	}
+	identityLogMu.Unlock()
+	if changed {
+		pluginLogf("%s", line)
 	}
 }

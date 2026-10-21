@@ -157,7 +157,6 @@ func defaultConfig() pluginConfig {
 		StreamSilenceTimeoutSeconds:       int(streamguard.DefaultSilence / time.Second),
 		StreamHeartbeatOnlyTimeoutSeconds: int(streamguard.DefaultHeartbeatOnly / time.Second),
 		ClientType:                        defaultClientType,
-		ClientVersion:                     defaultClientVersion,
 		HTTPReferer:                       defaultHTTPReferer,
 		XTitle:                            defaultXTitle,
 		HTTPTimeoutSeconds:                defaultHTTPTimeoutSeconds,

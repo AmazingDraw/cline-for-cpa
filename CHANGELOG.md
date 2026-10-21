@@ -2,6 +2,16 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.16 — 2026-10-21
+
+**客户端身份版本口径修正**（对齐官方 `cline/cline` `buildClineRequestHeaders()` + Desktop `DESKTOP_CLIENT_CONTEXT`）：Desktop 客户端版本改为 Cline Desktop app 版本（GitHub tag `desktop-v*`，**0.0.48**），不再拿 `@cline/core` 版本冒充；`X-Core-Version` 独立取 `@cline/core`（**0.0.95**，新缓存键 `core`）；CLI 仍为 npm `cline`（**3.0.73**）。Desktop `X-Platform` 由 `desktop` 改为官方的 `Cline Desktop`。`defaultConfig` 不再预填 `client_version`（此前它让 live 版本缓存从未生效，所有版本头恒为兜底值）。运行时取 `max(缓存, 兜底)`；模型发现请求复用同一套头。插件日志在身份变化时打一行 `client identity …`。`build.sh` 三个兜底按同源强制检查，任一落后 exit 1（`CHECK_UA_ONLY=1` 只检查）。后台版本刷新按 key 单飞。
+
+**模型**：上游免费层开始出现 `vendor/<slug>-free` id（`reflection/beam-free`、`nvidia/nemotron-3.5-lightning-free`、`poolside/laguna-s-2.1-free`）。旧的「按 Tier 放行」会广告它们，但路由会改写成 `cline-pass/<vendor>/<slug>`（不可用且走订阅池），改为**只按命名空间暴露**，这三个记录在生成表但不广告。`modelmeta` 刷新（27→26）：`cline-free/` 去掉 `mimo-v2.6-flash`、`muse-spark-1.3-contributor`；`cline-pass/` 去掉 `mimo-v2.5`、`mimo-v2.5-pro`。`modelmeta` 遇到多个同名候选且 feed 未指明 vendor 时不再按字母序猜，改为告警要求 `slugOverrides`；`<slug>-free` 回落到目录里的同名 slug；工具自身身份头对齐 CLI 3.0.73 / core 0.0.95。
+
+**测试**：`tools/modelmeta` 用 httptest 假数据覆盖 resolve / pick / override / 多候选不猜 / pinnedMeta / `runCheck` 各退出码，覆盖率 39.7% → 95.3%；插件测试隔离版本缓存、模型缓存与网络（此前会读运维机上的真实 `cline-models-cache.json`）。
+
+**私有发版脚本**（不进公开仓）：`scripts/release.sh`（分阶段、`DRY_RUN=1`、提交前人工确认、按文件 add）、`scripts/deploy-nas.sh`（linux 部署端 流程固化，默认 DRY_RUN）。
+
 ## 0.4.15 — 2026-10-20
 
 移除 `base_url` 配置：宿主设置页不再显示「Upstream OpenAI-compatible base」，上游固定 `https://api.cline.bot/api/v1`（`pluginConfig.BaseURL`、`ConfigFields` 条目、`applyConfig` 合并逻辑删除；`executor` / `oauth` / `device_oauth` / `quota` / `models_updater` / pass 探测统一走 `clineBaseURL()`）。旧配置里残留的 `base_url:` 被 YAML 解码静默忽略，不报错、不影响其他字段（`TestLegacyBaseURLConfigIgnored`）。测试改用未导出的 `upstreamBaseURL` + `withUpstreamBaseURL` 测试 hook 指向 httptest。

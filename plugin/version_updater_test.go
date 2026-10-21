@@ -27,68 +27,40 @@ func TestIsPlausibleVersion(t *testing.T) {
 }
 
 func TestResolveLiveClientVersionPrecedence(t *testing.T) {
-	// 1. Explicit user config wins
-	cfg := pluginConfig{
-		ClientVersion: "9.9.99",
+	resetVersionCacheForTest(t)
+
+	// 1. Explicit user config wins for the client version; core stays independent.
+	h := resolveClineHeaders(pluginConfig{ClientVersion: "9.9.99"})
+	if h.Version != "9.9.99" || h.PlatformVer != "9.9.99" {
+		t.Fatalf("explicit client_version: version=%q plat=%q", h.Version, h.PlatformVer)
 	}
-	h := resolveClineHeaders(cfg)
-	if h.Version != "9.9.99" {
-		t.Fatalf("expected user config version 9.9.99, got %q", h.Version)
-	}
-	if h.PlatformVer != "9.9.99" || h.CoreVersion != "9.9.99" {
-		t.Fatalf("expected 3-header alignment with 9.9.99, got plat=%q core=%q", h.PlatformVer, h.CoreVersion)
+	if h.CoreVersion != defaultCoreVersion {
+		t.Fatalf("core must not follow client_version, got %q", h.CoreVersion)
 	}
 
-	// 2. Cached dynamic version is used when user config is empty
-	versionMu.Lock()
-	versionCache["desktop"] = versionCacheEntry{
-		Version:   "0.0.34",
-		FetchedAt: time.Now(),
-	}
-	versionMu.Unlock()
-
-	cfgEmpty := pluginConfig{
-		ClientType: "cline-desktop",
-	}
-	h2 := resolveClineHeaders(cfgEmpty)
-	if h2.Version != "0.0.34" {
-		t.Fatalf("expected dynamic version 0.0.34, got %q", h2.Version)
-	}
-	if h2.PlatformVer != "0.0.34" || h2.CoreVersion != "0.0.34" {
-		t.Fatalf("expected 3-header alignment with 0.0.34, got plat=%q core=%q", h2.PlatformVer, h2.CoreVersion)
+	// 2. A cache newer than the fallback is used when config is empty.
+	setVersionCacheForTest("desktop", "9.0.1")
+	h2 := resolveClineHeaders(pluginConfig{ClientType: "cline-desktop"})
+	if h2.Version != "9.0.1" || h2.PlatformVer != "9.0.1" {
+		t.Fatalf("expected newer cached desktop 9.0.1, got %q/%q", h2.Version, h2.PlatformVer)
 	}
 
-	// 3. CLI profile resolves to "cli" key
-	versionMu.Lock()
-	versionCache["cli"] = versionCacheEntry{
-		Version:   "3.0.99",
-		FetchedAt: time.Now(),
-	}
-	versionMu.Unlock()
-
-	cfgCLI := pluginConfig{
-		Profile: "cli",
-	}
-	h3 := resolveClineHeaders(cfgCLI)
-	if h3.Version != "3.0.99" {
-		t.Fatalf("expected CLI dynamic version 3.0.99, got %q", h3.Version)
+	// 3. CLI profile resolves to the "cli" key.
+	setVersionCacheForTest("cli", "9.1.99")
+	h3 := resolveClineHeaders(pluginConfig{Profile: "cli"})
+	if h3.Version != "9.1.99" {
+		t.Fatalf("expected CLI dynamic version 9.1.99, got %q", h3.Version)
 	}
 	if h3.ClientType != "cline-cli" || h3.Platform != "cli" {
 		t.Fatalf("expected cli profile types, got type=%q plat=%q", h3.ClientType, h3.Platform)
 	}
-
-	// Clean up test cache
-	versionMu.Lock()
-	delete(versionCache, "desktop")
-	delete(versionCache, "cli")
-	versionMu.Unlock()
 }
 
 func TestDiskSnapshotPersistenceAndColdStart(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotFile := filepath.Join(tempDir, "test-version-cache.json")
 	customCachePath = snapshotFile
-	defer func() { customCachePath = "" }()
+	defer func() { customCachePath = testDefaultCachePath }()
 
 	// Populate cache and save snapshot to disk
 	versionMu.Lock()
@@ -135,6 +107,7 @@ func TestDiskSnapshotPersistenceAndColdStart(t *testing.T) {
 }
 
 func TestApplyClineHeadersInjectsAllAlignedHeaders(t *testing.T) {
+	resetVersionCacheForTest(t)
 	req, _ := http.NewRequest(http.MethodGet, "https://api.cline.bot", nil)
 	applyClineHeaders(req, pluginConfig{
 		ClientVersion: "0.0.34",
@@ -149,8 +122,8 @@ func TestApplyClineHeadersInjectsAllAlignedHeaders(t *testing.T) {
 	if req.Header.Get("X-Platform-Version") != "0.0.34" {
 		t.Fatalf("unexpected X-Platform-Version: %s", req.Header.Get("X-Platform-Version"))
 	}
-	if req.Header.Get("X-Core-Version") != "0.0.34" {
-		t.Fatalf("unexpected X-Core-Version: %s", req.Header.Get("X-Core-Version"))
+	if req.Header.Get("X-Core-Version") != defaultCoreVersion {
+		t.Fatalf("X-Core-Version must be the @cline/core version, got %s", req.Header.Get("X-Core-Version"))
 	}
 }
 
@@ -279,7 +252,7 @@ func TestRefreshVersionInBackgroundDesktopAndCLI(t *testing.T) {
 
 	snapshot := filepath.Join(t.TempDir(), "cline-version-cache.json")
 	customCachePath = snapshot
-	t.Cleanup(func() { customCachePath = "" })
+	t.Cleanup(func() { customCachePath = testDefaultCachePath })
 
 	versionMu.Lock()
 	versionCache = map[string]versionCacheEntry{}
@@ -313,7 +286,10 @@ func TestRefreshVersionInBackgroundDesktopAndCLI(t *testing.T) {
 	}
 }
 
-func TestRefreshVersionInBackgroundNpmFallback(t *testing.T) {
+// Desktop has no npm fallback: @cline/core is a different version line, so a
+// GitHub failure must leave the desktop cache untouched (fallback keeps serving)
+// even when npm would answer.
+func TestRefreshVersionDesktopHasNoNpmFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept") == "application/vnd.github.v3+json" {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -327,26 +303,33 @@ func TestRefreshVersionInBackgroundNpmFallback(t *testing.T) {
 	}))
 	defer srv.Close()
 	overrideVersionEndpoints(t, srv.URL, srv.URL)
-	customCachePath = filepath.Join(t.TempDir(), "v.json")
-	t.Cleanup(func() { customCachePath = "" })
-
-	versionMu.Lock()
-	delete(versionCache, targetKeyDesktop)
-	versionMu.Unlock()
+	resetVersionCacheForTest(t)
 
 	refreshVersionInBackground(targetKeyDesktop)
 
 	versionMu.RLock()
 	got := versionCache[targetKeyDesktop].Version
 	versionMu.RUnlock()
-	if got != "6.6.6" {
-		t.Fatalf("npm fallback version=%q", got)
+	if got != "" {
+		t.Fatalf("desktop must not take the @cline/core version, got %q", got)
+	}
+	if v := resolveLiveVersion(targetKeyDesktop, defaultClientVersion); v != defaultClientVersion {
+		t.Fatalf("fallback should serve, got %q", v)
+	}
+
+	// The core key does take the npm @cline/core version.
+	refreshVersionInBackground(targetKeyCore)
+	versionMu.RLock()
+	core := versionCache[targetKeyCore].Version
+	versionMu.RUnlock()
+	if core != "6.6.6" {
+		t.Fatalf("core cache=%q want 6.6.6", core)
 	}
 }
 
 func TestLoadVersionSnapshotSkipsGarbage(t *testing.T) {
 	customCachePath = filepath.Join(t.TempDir(), "bad.json")
-	t.Cleanup(func() { customCachePath = "" })
+	t.Cleanup(func() { customCachePath = testDefaultCachePath })
 	if err := os.WriteFile(customCachePath, []byte("not-json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -388,12 +371,12 @@ func TestResolveLiveClientVersionFallbackAndStale(t *testing.T) {
 	defer srv.Close()
 	overrideVersionEndpoints(t, srv.URL, srv.URL)
 	customCachePath = filepath.Join(t.TempDir(), "empty.json")
-	t.Cleanup(func() { customCachePath = "" })
+	t.Cleanup(func() { customCachePath = testDefaultCachePath })
 
 	versionMu.Lock()
 	delete(versionCache, targetKeyCLI)
 	versionMu.Unlock()
-	if got := resolveLiveClientVersion("cline-cli", "0.0.1"); got != "0.0.1" {
+	if got := resolveLiveVersion(targetKeyCLI, "0.0.1"); got != "0.0.1" {
 		t.Fatalf("empty cache fallback=%q", got)
 	}
 
@@ -403,7 +386,7 @@ func TestResolveLiveClientVersionFallbackAndStale(t *testing.T) {
 		FetchedAt: time.Now().Add(-7 * time.Hour),
 	}
 	versionMu.Unlock()
-	if got := resolveLiveClientVersion("desktop", "0.0.1"); got != "2.2.2" {
+	if got := resolveLiveVersion(targetKeyDesktop, "0.0.1"); got != "2.2.2" {
 		t.Fatalf("stale cache should still return last version, got %q", got)
 	}
 }

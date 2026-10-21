@@ -11,9 +11,9 @@ import (
 // hide the free window behind the plan's window).
 func TestNormalizeModelKeepsFreeNamespace(t *testing.T) {
 	cases := map[string][2]string{
-		"cline-free/deepseek-v4.1-flash":        {"cline-free/deepseek-v4.1-flash", "cline-free/deepseek-v4.1-flash"},
-		"cline-free/mimo-v2.6-flash":            {"cline-free/mimo-v2.6-flash", "cline-free/mimo-v2.6-flash"},
-		"cline-free/muse-spark-1.3-contributor": {"cline-free/muse-spark-1.3-contributor", "cline-free/muse-spark-1.3-contributor"},
+		"cline-free/deepseek-v4.1-flash":   {"cline-free/deepseek-v4.1-flash", "cline-free/deepseek-v4.1-flash"},
+		"cline-free/solar-mini4":           {"cline-free/solar-mini4", "cline-free/solar-mini4"},
+		"cline-free/nemotron-3.5-super-vl": {"cline-free/nemotron-3.5-super-vl", "cline-free/nemotron-3.5-super-vl"},
 		// bare ids keep the historical default
 		"deepseek-v4.1-flash":           {"cline-pass/deepseek-v4.1-flash", "cline-pass/deepseek-v4.1-flash"},
 		"cline-pass/kimi-k3":            {"cline-pass/kimi-k3", "cline-pass/kimi-k3"},
@@ -56,13 +56,17 @@ func TestExposedModelsTiers(t *testing.T) {
 			t.Fatalf("unexpected namespace in advertised list: %s", id)
 		}
 	}
-	if len(pass) < 11 {
-		t.Fatalf("clinePass models advertised = %d, want at least 11 (17 minus the 3 blacklisted)", len(pass))
+	// Floor tracks the live feed: 2026-10-21 upstream dropped mimo-v2.5 and
+	// mimo-v2.5-pro (13 clinePass rows minus the 3 blacklisted).
+	if len(pass) < 10 {
+		t.Fatalf("clinePass models advertised = %d, want at least 10 (13 minus the 3 blacklisted)", len(pass))
 	}
 	// Floor tracks the live feed, not a historical peak. 2026-10-14 refresh
 	// swapped step-5-preview for nemotron-3.5-super-vl (2026-10-16).
-	if len(free)+len(stealth) < 4 {
-		t.Fatalf("free/stealth models advertised = %d, want at least 4", len(free)+len(stealth))
+	// 2026-10-21: mimo-v2.6-flash / muse-spark left cline-free/; the three new
+	// vendor/*-free ids are not served (no route), leaving 3.
+	if len(free)+len(stealth) < 3 {
+		t.Fatalf("free/stealth models advertised = %d, want at least 3", len(free)+len(stealth))
 	}
 	// The blacklist is honoured (matched on the full id here)…
 	for _, banned := range []string{
@@ -79,6 +83,10 @@ func TestExposedModelsTiers(t *testing.T) {
 		"cline-cloud/deepseek-v4.1-flash",
 		"openai/gpt-6-astra",
 		"spacexai/grok-4.7",
+		// free tier in a vendor namespace: no route yet, so not advertised
+		"reflection/beam-free",
+		"nvidia/nemotron-3.5-lightning-free",
+		"poolside/laguna-s-2.1-free",
 	} {
 		if _, ok := lookupModel(banned); ok {
 			t.Fatalf("%s belongs to an unserved tier and must not be advertised", banned)
@@ -88,8 +96,7 @@ func TestExposedModelsTiers(t *testing.T) {
 	for _, want := range []string{
 		"cline-free/nemotron-3.5-super-vl",
 		"cline-free/solar-mini4",
-		"cline-free/mimo-v2.6-flash",
-		"cline-free/muse-spark-1.3-contributor",
+		"cline-free/minimax-m3.1-flash",
 		"cline-pass/mimo-v2.6-pro",
 		"cline-pass/glm-5.3",
 		"cline-pass/deepseek-v4.1-flash",
@@ -127,12 +134,13 @@ func TestExcludedModelsSemantics(t *testing.T) {
 // Metadata is only useful if it reaches the host, so both the catalog lookup and
 // the ABI payload are asserted.
 func TestModelMetadataReachesABIPayload(t *testing.T) {
-	mimo, ok := lookupModel("cline-free/mimo-v2.6-flash")
+	const freeID = "cline-free/nemotron-3.5-super-vl"
+	mimo, ok := lookupModel(freeID)
 	if !ok {
-		t.Fatal("free mimo model missing from the catalog")
+		t.Fatal("free model missing from the catalog")
 	}
 	if mimo.Meta.ContextLength <= 0 || mimo.Meta.MaxOutputTokens <= 0 || mimo.Meta.DisplayName == "" {
-		t.Fatalf("mimo-v2.6-flash metadata incomplete: %+v", mimo.Meta)
+		t.Fatalf("%s metadata incomplete: %+v", freeID, mimo.Meta)
 	}
 
 	// Generated rows must not regress to blank windows after a refresh.
@@ -147,7 +155,7 @@ func TestModelMetadataReachesABIPayload(t *testing.T) {
 
 	var seen bool
 	for _, m := range staticModels().Models {
-		if m.ID != "cline-free/mimo-v2.6-flash" {
+		if m.ID != freeID {
 			continue
 		}
 		seen = true
@@ -166,7 +174,7 @@ func TestModelMetadataReachesABIPayload(t *testing.T) {
 		}
 	}
 	if !seen {
-		t.Fatal("free mimo model missing from the ABI payload")
+		t.Fatal("free model missing from the ABI payload")
 	}
 }
 

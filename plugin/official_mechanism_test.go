@@ -17,16 +17,17 @@ import (
 // --- header configurability (no rebuild on desktop version bump) ---
 
 func TestApplyClineHeadersUsesDefaults(t *testing.T) {
+	resetVersionCacheForTest(t)
 	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid/x", nil)
-	cfg := pluginConfig{ClientVersion: defaultClientVersion}
+	cfg := pluginConfig{}
 	applyClineHeaders(req, cfg)
 	want := map[string]string{
 		"User-Agent":         "Cline/" + defaultClientVersion,
 		"X-Client-Type":      defaultClientType,
 		"X-Client-Version":   defaultClientVersion,
-		"X-Platform":         "desktop", // derived from cline-desktop
+		"X-Platform":         "Cline Desktop", // official DESKTOP_CLIENT_CONTEXT.platform
 		"X-Platform-Version": defaultClientVersion,
-		"X-Core-Version":     defaultClientVersion,
+		"X-Core-Version":     defaultCoreVersion,
 		"X-IS-MULTIROOT":     "false",
 		"HTTP-Referer":       defaultHTTPReferer,
 		"X-Title":            defaultXTitle,

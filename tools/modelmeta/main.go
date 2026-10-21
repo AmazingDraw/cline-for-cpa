@@ -36,14 +36,24 @@ import (
 	"time"
 )
 
+// baseURL is a variable only so tests can point the tool at an httptest server.
+var baseURL = "https://api.cline.bot/api/v1"
+
+// Identity sent to the Cline API: the official CLI identity. clientVersion and
+// coreVersion must equal plugin/cline_headers.go defaultCLIClientVersion and
+// defaultCoreVersion (TestIdentityMatchesPlugin enforces it).
 const (
-	baseURL       = "https://api.cline.bot/api/v1"
+	clientVersion = "3.0.73"
+	coreVersion   = "0.0.95"
+)
+
+const (
 	feedPath      = "/ai/cline/recommended-models"
 	catalogPath   = "/ai/cline/models"
 	outFile       = "plugin/modelmeta_gen.go"
 	defaultAuths  = ".cli-proxy-api/auths"
 	requestTimout = 45 * time.Second
-	userAgent     = "Cline/3.0.64"
+	userAgent     = "Cline/" + clientVersion
 )
 
 // slugOverrides pins a feed leaf to an exact catalog id when neither an exact
@@ -51,6 +61,9 @@ const (
 // "vendor/slug" catalog ids.
 var slugOverrides = map[string]string{
 	"qwen3.8-max": "qwen/qwen3.8-max-0902",
+	// Free-tier alias; the catalog publishes only the full model name
+	// (sole reflection/beam* row, checked 2026-10-21).
+	"beam-free": "reflection/beam-1.0-501b-a23b",
 }
 
 // pinnedMeta keeps hand-verified metadata for feed rows that the catalog does
@@ -123,30 +136,44 @@ type row struct {
 }
 
 func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run is main without os.Exit so tests can drive the whole flow; it returns
+// the process exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("modelmeta", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	var (
-		check   = flag.Bool("check", false, "report drift without writing the file")
-		token   = flag.String("token", "", "bearer to use instead of the local auth file")
-		out     = flag.String("out", outFile, "output path for the generated Go file")
-		verbose = flag.Bool("v", false, "print every resolved row")
+		check   = fs.Bool("check", false, "report drift without writing the file")
+		token   = fs.String("token", "", "bearer to use instead of the local auth file")
+		out     = fs.String("out", outFile, "output path for the generated Go file")
+		verbose = fs.Bool("v", false, "print every resolved row")
 	)
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	fail := func(format string, a ...any) int {
+		fmt.Fprintf(stderr, "modelmeta: "+format+"\n", a...)
+		return 1
+	}
 
 	bearer := strings.TrimSpace(*token)
 	if bearer == "" {
 		var err error
 		bearer, err = tokenFromAuthFile()
 		if err != nil {
-			fatal("no --token given and could not read a local Cline credential: %v", err)
+			return fail("no --token given and could not read a local Cline credential: %v", err)
 		}
 	}
 
 	feed, err := fetchFeed(bearer)
 	if err != nil {
-		fatal("fetch feed: %v", err)
+		return fail("fetch feed: %v", err)
 	}
 	catalog, err := fetchCatalog(bearer)
 	if err != nil {
-		fatal("fetch catalog: %v", err)
+		return fail("fetch catalog: %v", err)
 	}
 
 	rows := resolve(feed, catalog)
@@ -155,13 +182,13 @@ func main() {
 	// formatting-only diff.
 	formatted, errFormat := format.Source([]byte(generated))
 	if errFormat != nil {
-		fatal("generated source does not compile-parse: %v", errFormat)
+		return fail("generated source does not compile-parse: %v", errFormat)
 	}
 	generated = string(formatted)
 
 	if *verbose {
 		for _, r := range rows {
-			fmt.Printf("%-46s %-10s ctx=%-9d out=%-8d %-9s under=%-34s %s\n",
+			fmt.Fprintf(stdout, "%-46s %-10s ctx=%-9d out=%-8d %-9s under=%-34s %s\n",
 				r.clientID, r.tier, r.contextLen, r.maxOutput, r.note, r.underlying, r.warn)
 		}
 	}
@@ -174,23 +201,24 @@ func main() {
 		}
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(os.Stderr, "WARN %d row(s) kept without full metadata:\n", len(missing))
+		fmt.Fprintf(stderr, "WARN %d row(s) kept without full metadata:\n", len(missing))
 		for _, m := range missing {
-			fmt.Fprintln(os.Stderr, "  -", m)
+			fmt.Fprintln(stderr, "  -", m)
 		}
 	}
 
 	if *check {
-		os.Exit(runCheck(*out, rows, generated))
+		return runCheck(*out, rows, generated, stdout, stderr)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
-		fatal("mkdir: %v", err)
+		return fail("mkdir: %v", err)
 	}
 	if err := os.WriteFile(*out, []byte(generated), 0o644); err != nil {
-		fatal("write %s: %v", *out, err)
+		return fail("write %s: %v", *out, err)
 	}
-	fmt.Printf("modelmeta: wrote %s (%d rows)\n", *out, len(rows))
+	fmt.Fprintf(stdout, "modelmeta: wrote %s (%d rows)\n", *out, len(rows))
+	return 0
 }
 
 // tokenFromAuthFile reads the single cline-*.json credential in the default
@@ -232,10 +260,11 @@ func get(bearer, path string, out any) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-CLIENT-TYPE", "cline-cli")
-	req.Header.Set("X-CLIENT-VERSION", "3.0.64")
+	req.Header.Set("X-CLIENT-VERSION", clientVersion)
 	req.Header.Set("X-PLATFORM", "cli")
-	req.Header.Set("X-PLATFORM-VERSION", "3.0.64")
-	req.Header.Set("X-CORE-VERSION", "3.0.64")
+	req.Header.Set("X-PLATFORM-VERSION", clientVersion)
+	req.Header.Set("X-CORE-VERSION", coreVersion)
+	req.Header.Set("X-IS-MULTIROOT", "false")
 	req.Header.Set("HTTP-Referer", "https://cline.bot")
 	req.Header.Set("X-Title", "Cline")
 
@@ -289,6 +318,14 @@ func resolve(feed map[string][]feedEntry, catalog []catalogEntry) []row {
 				description: strings.TrimSpace(e.Description),
 			}
 			match := pick(leaf, e.ID, byLeaf, &r.note)
+			if match == nil && r.note == "ambiguous" {
+				if pin, ok := pinnedMeta[leaf]; !ok || pin.Underlying == "" {
+					r.warn = "ambiguous slug " + leaf + " (" + strings.Join(candidateIDs(byLeaf[leaf]), ", ") +
+						") — add it to slugOverrides"
+					rows = append(rows, r)
+					continue
+				}
+			}
 			if match == nil {
 				// No catalog row: fall back to the hand-verified pin when we have
 				// one, so a model that is simply absent from the catalog keeps
@@ -344,6 +381,11 @@ func pick(leaf, feedID string, byLeaf map[string][]catalogEntry, note *string) *
 		// poolside/laguna-s-2.1:free and friends: the catalog drops the :free suffix.
 		cands = byLeaf[strings.TrimSuffix(leaf, ":free")]
 	}
+	if len(cands) == 0 && strings.HasSuffix(leaf, "-free") {
+		// Since 2026-10-21 the free tier also lists vendor/<slug>-free ids
+		// (reflection/beam-free); the catalog row is the plain slug.
+		cands = byLeaf[strings.TrimSuffix(leaf, "-free")]
+	}
 	if len(cands) == 0 {
 		// Catalog slugs often carry a date suffix (qwen3.8-max → qwen3.8-max-0902).
 		// Only a *unique* prefix match is trusted.
@@ -371,9 +413,20 @@ func pick(leaf, feedID string, byLeaf map[string][]catalogEntry, note *string) *
 		*note = "exact"
 		return &cands[0]
 	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].ID < cands[j].ID })
-	*note = "ambiguous-sorted"
-	return &cands[0]
+	// Several vendors publish this slug and the feed names none of them: do
+	// not guess (a wrong pick ships a wrong context window). The caller warns
+	// and the fix is an explicit slugOverrides entry.
+	*note = "ambiguous"
+	return nil
+}
+
+func candidateIDs(cands []catalogEntry) []string {
+	ids := make([]string, 0, len(cands))
+	for _, c := range cands {
+		ids = append(ids, c.ID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func render(rows []row) string {
@@ -438,34 +491,34 @@ var refreshedLine = regexp.MustCompile(`(?m)^// Refreshed: .*\n`)
 // runCheck grades drift between the committed file and a fresh fetch and
 // returns the process exit code: 1 on hard drift, 0 otherwise (soft drift is
 // printed as WARN). See drift for the rules.
-func runCheck(path string, rows []row, generated string) int {
+func runCheck(path string, rows []row, generated string, stdout, stderr io.Writer) int {
 	oldSrc, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "modelmeta: read %s: %v\n", path, err)
+		fmt.Fprintf(stderr, "modelmeta: read %s: %v\n", path, err)
 		return 1
 	}
 	if sameIgnoringTimestamp(string(oldSrc), generated) {
-		fmt.Printf("modelmeta: up to date (%d rows)\n", len(rows))
+		fmt.Fprintf(stdout, "modelmeta: up to date (%d rows)\n", len(rows))
 		return 0
 	}
 	old, err := parseGenerated(string(oldSrc))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "modelmeta: cannot parse %s (%v) — treating as hard drift\n", path, err)
+		fmt.Fprintf(stderr, "modelmeta: cannot parse %s (%v) — treating as hard drift\n", path, err)
 		return 1
 	}
 	d := compareCatalogs(old, rowsToCatalog(rows))
 	if len(d.hard) > 0 {
-		fmt.Fprintf(os.Stderr, "modelmeta: HARD drift in %s (%d hard, %d warn) — run `go run ./tools/modelmeta`\n%s",
+		fmt.Fprintf(stderr, "modelmeta: HARD drift in %s (%d hard, %d warn) — run `go run ./tools/modelmeta`\n%s",
 			path, len(d.hard), len(d.warn), formatDrift(d))
 		return 1
 	}
 	if len(d.warn) > 0 {
-		fmt.Fprintf(os.Stderr, "modelmeta: WARN soft drift only (%d) — exposure/routing unchanged; refresh at leisure\n%s",
+		fmt.Fprintf(stderr, "modelmeta: WARN soft drift only (%d) — exposure/routing unchanged; refresh at leisure\n%s",
 			len(d.warn), formatDrift(d))
 	} else {
-		fmt.Fprintf(os.Stderr, "modelmeta: WARN %s differs only in formatting — refresh at leisure\n", path)
+		fmt.Fprintf(stderr, "modelmeta: WARN %s differs only in formatting — refresh at leisure\n", path)
 	}
-	fmt.Printf("modelmeta: no hard drift (%d rows)\n", len(rows))
+	fmt.Fprintf(stdout, "modelmeta: no hard drift (%d rows)\n", len(rows))
 	return 0
 }
 
@@ -544,9 +597,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
-}
-
-func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "modelmeta: "+format+"\n", args...)
-	os.Exit(1)
 }

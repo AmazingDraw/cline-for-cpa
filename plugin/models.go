@@ -133,16 +133,17 @@ func isServedModel(id string) bool {
 	return isServedModelWithCatalog(id, currentCatalogMap())
 }
 
-func isServedModelWithCatalog(id string, catalog map[string]modelMeta) bool {
-	if isServedNamespace(id) {
-		return true
-	}
-	if meta, ok := catalog[id]; ok {
-		if meta.Tier == "free" || meta.Tier == "clinePass" {
-			return true
-		}
-	}
-	return false
+// isServedModelWithCatalog decides exposure by namespace only.
+//
+// It used to also pass any catalog row whose Tier was free/clinePass, whatever
+// its namespace. On 2026-10-21 the feed started listing free models as
+// vendor/<slug>-free (reflection/beam-free, …): that rule advertised them, but
+// NormalizeModel has no route for a foreign namespace and rewrote them to
+// cline-pass/reflection/beam-free — an advertised model that cannot work and
+// would be sent to the subscription pool. Until such ids get a verified route
+// they stay in modelmeta (feed record) but are not served.
+func isServedModelWithCatalog(id string, _ map[string]modelMeta) bool {
+	return isServedNamespace(id)
 }
 
 func currentCatalogMap() map[string]modelMeta {
