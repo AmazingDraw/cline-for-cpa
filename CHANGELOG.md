@@ -2,6 +2,23 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.18 — 2026-10-28
+
+**关闭状态不再被定时刷新冲掉**：`auth.refresh` 回传宿主请求里的 `Disabled`，以及文件上的 `disabled`。宿主把缺省的 `Disabled: false` 当成执行器主动重新启用，Cline 的刷新契约又会在关闭之后继续轮询，于是开关会被自动打开。
+
+**身份兜底对齐 live**：Desktop `0.0.49`，CLI `3.0.74`，Core `0.2.0`。
+
+## 0.4.17 — 2026-10-24
+
+**模型元数据刷新（26→27）**：
+- 新增 `cline-pass/kimi-k3.1-pro`（Moonshot AI 前沿复杂推理与 Agent 旗舰模型，1M context / 943718 output tokens）。
+- `minimax-m3.1-flash` 从免费池正式转入订阅池 `cline-pass/minimax-m3.1-flash`（1M context / 524288 output tokens）；原免费池保留 `nemotron-3.5-super-vl` 与 `solar-mini4`（当前暴露：订阅 12 + 免费 2）。
+- 模型能力参数与上限对齐：`deepseek-v4.1-flash`、`kimi-k3`、`mimo-v2.6-flash` 等官方模型全量支持 `parallel_tool_calls`；`kimi-k3` 补齐 `max_completion_tokens`；`glm-5.3-flash` 与 `reflection/beam-free` 按照上游 catalog 微调 `MaxOutputTokens`。
+
+**测试与工程**：
+- `TestExposedModelsTiers` 同步对齐 `minimax-m3.1-flash` 转入 `cline-pass/` 期望，新增 `kimi-k3.1-pro` 存在性断言，并修正免费池下限计数（2 席）。
+- 插件版本号升级至 `0.4.17`。
+
 ## 0.4.16 — 2026-10-21
 
 **客户端身份版本口径修正**（对齐官方 `cline/cline` `buildClineRequestHeaders()` + Desktop `DESKTOP_CLIENT_CONTEXT`）：Desktop 客户端版本改为 Cline Desktop app 版本（GitHub tag `desktop-v*`，**0.0.48**），不再拿 `@cline/core` 版本冒充；`X-Core-Version` 独立取 `@cline/core`（**0.0.95**，新缓存键 `core`）；CLI 仍为 npm `cline`（**3.0.73**）。Desktop `X-Platform` 由 `desktop` 改为官方的 `Cline Desktop`。`defaultConfig` 不再预填 `client_version`（此前它让 live 版本缓存从未生效，所有版本头恒为兜底值）。运行时取 `max(缓存, 兜底)`；模型发现请求复用同一套头。插件日志在身份变化时打一行 `client identity …`。`build.sh` 三个兜底按同源强制检查，任一落后 exit 1（`CHECK_UA_ONLY=1` 只检查）。后台版本刷新按 key 单飞。

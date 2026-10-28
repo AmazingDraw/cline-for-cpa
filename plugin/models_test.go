@@ -58,15 +58,18 @@ func TestExposedModelsTiers(t *testing.T) {
 	}
 	// Floor tracks the live feed: 2026-10-21 upstream dropped mimo-v2.5 and
 	// mimo-v2.5-pro (13 clinePass rows minus the 3 blacklisted).
+	// 2026-10-24: upstream added kimi-k3.1-pro and moved minimax-m3.1-flash to
+	// clinePass (15 clinePass rows minus the 3 blacklisted = 12).
 	if len(pass) < 10 {
-		t.Fatalf("clinePass models advertised = %d, want at least 10 (13 minus the 3 blacklisted)", len(pass))
+		t.Fatalf("clinePass models advertised = %d, want at least 10 (15 minus the 3 blacklisted)", len(pass))
 	}
 	// Floor tracks the live feed, not a historical peak. 2026-10-14 refresh
 	// swapped step-5-preview for nemotron-3.5-super-vl (2026-10-16).
 	// 2026-10-21: mimo-v2.6-flash / muse-spark left cline-free/; the three new
 	// vendor/*-free ids are not served (no route), leaving 3.
-	if len(free)+len(stealth) < 3 {
-		t.Fatalf("free/stealth models advertised = %d, want at least 3", len(free)+len(stealth))
+	// 2026-10-24: minimax-m3.1-flash promoted to clinePass, leaving 2 in cline-free.
+	if len(free)+len(stealth) < 2 {
+		t.Fatalf("free/stealth models advertised = %d, want at least 2", len(free)+len(stealth))
 	}
 	// The blacklist is honoured (matched on the full id here)…
 	for _, banned := range []string{
@@ -96,7 +99,8 @@ func TestExposedModelsTiers(t *testing.T) {
 	for _, want := range []string{
 		"cline-free/nemotron-3.5-super-vl",
 		"cline-free/solar-mini4",
-		"cline-free/minimax-m3.1-flash",
+		"cline-pass/minimax-m3.1-flash",
+		"cline-pass/kimi-k3.1-pro",
 		"cline-pass/mimo-v2.6-pro",
 		"cline-pass/glm-5.3",
 		"cline-pass/deepseek-v4.1-flash",

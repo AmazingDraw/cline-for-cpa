@@ -347,6 +347,79 @@ func TestWithDiskFallbackRefusesAmbiguity(t *testing.T) {
 	}
 }
 
+func TestAuthRefreshEchoesDisabledSoHostCannotReenable(t *testing.T) {
+	applyTestConfig(t, "{}")
+
+	fromFile := clineStorageForTest(time.Hour)
+	fromFile["disabled"] = true
+	assertRefreshStaysDisabled(t, mustRefreshRequest(t, map[string]any{
+		"storage_json": mustJSONString(t, fromFile),
+	}))
+
+	fromMemory := clineStorageForTest(time.Hour)
+	assertRefreshStaysDisabled(t, mustRefreshRequest(t, map[string]any{
+		"storage_json": mustJSONString(t, fromMemory),
+		"Metadata":     map[string]any{"disabled": true, "email": "contract@example.com"},
+	}))
+
+	enabled := refreshAuthForTest(t, clineStorageForTest(time.Hour))
+	if !enabled.OK {
+		t.Fatalf("enabled refresh failed: %+v", enabled.Error)
+	}
+	var enabledResult struct {
+		Auth map[string]any `json:"Auth"`
+	}
+	if err := json.Unmarshal(enabled.Result, &enabledResult); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := enabledResult.Auth["Disabled"]; present {
+		t.Fatalf("enabled refresh set Disabled = %#v, want the field omitted", enabledResult.Auth["Disabled"])
+	}
+}
+
+func assertRefreshStaysDisabled(t *testing.T, req []byte) {
+	t.Helper()
+	out, err := HandleMethod("auth.refresh", req)
+	if err != nil {
+		t.Fatalf("auth.refresh: %v", err)
+	}
+	env := decodeEnvelope(t, out)
+	if !env.OK {
+		t.Fatalf("disabled refresh failed: %+v", env.Error)
+	}
+	var result struct {
+		Auth map[string]any `json:"Auth"`
+	}
+	if err := json.Unmarshal(env.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Auth["Disabled"] != true {
+		t.Fatalf("Auth.Disabled = %#v, want true", result.Auth["Disabled"])
+	}
+	meta, _ := result.Auth["Metadata"].(map[string]any)
+	if meta["disabled"] != true {
+		t.Fatalf("Metadata.disabled = %#v, want true", meta["disabled"])
+	}
+}
+
+func mustRefreshRequest(t *testing.T, body map[string]any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func mustJSONString(t *testing.T, body map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 // --- observability of the contract ----------------------------------------------
 
 // TestHostPollLogIsThrottled pins the signal operations relies on: a no-op host

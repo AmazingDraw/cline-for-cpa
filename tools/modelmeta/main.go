@@ -43,8 +43,8 @@ var baseURL = "https://api.cline.bot/api/v1"
 // coreVersion must equal plugin/cline_headers.go defaultCLIClientVersion and
 // defaultCoreVersion (TestIdentityMatchesPlugin enforces it).
 const (
-	clientVersion = "3.0.73"
-	coreVersion   = "0.0.95"
+	clientVersion = "3.0.74"
+	coreVersion   = "0.2.0"
 )
 
 const (

@@ -37,11 +37,11 @@ const (
 	defaultClientType = "cline-desktop"
 	// defaultClientVersion is the Cline Desktop app version (GitHub tag desktop-v*).
 	// It is NOT the @cline/core npm version. Bump to live latest on every release.
-	defaultClientVersion = "0.0.48"
+	defaultClientVersion = "0.0.49"
 	// defaultCLIClientVersion is the Cline CLI version (npm `cline`, tag cli-v*).
-	defaultCLIClientVersion = "3.0.73"
+	defaultCLIClientVersion = "3.0.74"
 	// defaultCoreVersion is the @cline/core npm version, sent as X-Core-Version.
-	defaultCoreVersion = "0.0.95"
+	defaultCoreVersion = "0.2.0"
 	// desktopPlatform is the X-Platform value the official Desktop sends.
 	desktopPlatform    = "Cline Desktop"
 	defaultHTTPReferer = "https://cline.bot"

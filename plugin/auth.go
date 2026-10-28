@@ -303,6 +303,13 @@ func handleAuthRefresh(request []byte) ([]byte, error) {
 		"Metadata":    meta,
 		"Attributes":  attrs,
 	}
+	// The host treats a missing Disabled as an explicit re-enable when this
+	// refresh started from an already-disabled credential. Echo the operator's
+	// toggle so a scheduled refresh cannot turn the card back on.
+	if requestDisabled(request) {
+		meta["disabled"] = true
+		auth["Disabled"] = true
+	}
 	return okEnvelope(map[string]any{
 		"Auth":             auth,
 		"NextRefreshAfter": next.UTC().Format(time.RFC3339),
@@ -357,6 +364,52 @@ func extractRequestAttributes(request []byte) map[string]string {
 		}
 	}
 	return out
+}
+
+// requestDisabled reports whether the host still considers this credential
+// switched off. The flag lives in metadata after a management toggle, and on
+// the auth file itself (`disabled`) across reloads.
+func requestDisabled(request []byte) bool {
+	var probe struct {
+		Metadata    map[string]any `json:"metadata"`
+		MetadataCap map[string]any `json:"Metadata"`
+		Disabled    *bool          `json:"disabled"`
+		DisabledCap *bool          `json:"Disabled"`
+		Auth        struct {
+			Disabled bool           `json:"Disabled"`
+			Metadata map[string]any `json:"Metadata"`
+		} `json:"Auth"`
+	}
+	_ = json.Unmarshal(request, &probe)
+	if boolFromMap(probe.Metadata, "disabled") || boolFromMap(probe.MetadataCap, "disabled") || boolFromMap(probe.Auth.Metadata, "disabled") {
+		return true
+	}
+	if probe.Auth.Disabled {
+		return true
+	}
+	if probe.Disabled != nil && *probe.Disabled {
+		return true
+	}
+	if probe.DisabledCap != nil && *probe.DisabledCap {
+		return true
+	}
+	raw := extractStorageJSON(request)
+	if len(raw) == 0 {
+		return false
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return false
+	}
+	return boolFromMap(doc, "disabled")
+}
+
+func boolFromMap(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	on, ok := m[key].(bool)
+	return ok && on
 }
 
 func extractRequestAuthID(request []byte) string {
