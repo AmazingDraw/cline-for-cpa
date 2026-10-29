@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.19 — 2026-10-29
+
+**模型表刷新（27 行，id 无增删，免费池无变化）**：`cline-pass/kimi-k3.1-pro` 的支持参数新增 `logprobs`、`top_logprobs`；`cline-pass/glm-5.3-flash` 的输出上限 943717 → 131072。对外仍是 12 个 `cline-pass` 加 2 个 `cline-free`（`nemotron-3.5-super-vl`、`solar-mini4`）。
+
+**客户端身份无变化**：Desktop `0.0.49`，CLI `3.0.74`，Core `0.2.0`，与 live 一致。
+
 ## 0.4.18 — 2026-10-28
 
 **关闭状态不再被定时刷新冲掉**：`auth.refresh` 回传宿主请求里的 `Disabled`，以及文件上的 `disabled`。宿主把缺省的 `Disabled: false` 当成执行器主动重新启用，Cline 的刷新契约又会在关闭之后继续轮询，于是开关会被自动打开。
