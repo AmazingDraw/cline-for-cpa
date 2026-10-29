@@ -390,11 +390,3 @@ func TestResolveLiveClientVersionFallbackAndStale(t *testing.T) {
 		t.Fatalf("stale cache should still return last version, got %q", got)
 	}
 }
-
-func TestStartVersionUpdater(t *testing.T) {
-	// Warm-up is fire-and-forget; this test only pins that the exported
-	// entry point is safe to call more than once (sync.Once). Fetch behaviour
-	// is covered by TestRefreshVersionInBackgroundDesktopAndCLI.
-	StartVersionUpdater()
-	StartVersionUpdater()
-}

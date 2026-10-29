@@ -31,15 +31,20 @@ const (
 //   - go run ./tools/modelmeta  → plugin/modelmeta_gen.go  (then --check)
 //
 // build.sh enforces each fallback ≥ live cache/probe for the same source.
-var PluginVersion = "0.4.19"
+var PluginVersion = "0.4.20"
 
 // HandleMethod is the plugin ABI dispatcher (mirrors cursor-for-cpa plugin.HandleMethod).
 func HandleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
-	case "plugin.register", "plugin.reconfigure":
-		StartVersionUpdater()
-		StartModelsUpdater()
-		return handleLifecycle(request)
+	case "plugin.register":
+		// Config is applied first (base_url / auth_dir feed the sync), then the
+		// model list is refreshed synchronously BEFORE the registration is
+		// returned: the host registers models right after this call and never
+		// again. See startup_sync.go.
+		return handleLifecycleSync(request, true)
+	case "plugin.reconfigure":
+		// Config only. A reconfigure must never block on the network.
+		return handleLifecycleSync(request, false)
 	case "plugin.shutdown":
 		return okEnvelope(map[string]any{})
 	case "executor.identifier", "auth.identifier":
@@ -83,6 +88,10 @@ type lifecycleRequest struct {
 }
 
 func handleLifecycle(request []byte) ([]byte, error) {
+	return handleLifecycleSync(request, false)
+}
+
+func handleLifecycleSync(request []byte, startupSync bool) ([]byte, error) {
 	if len(request) > 0 {
 		var req lifecycleRequest
 		if err := json.Unmarshal(request, &req); err != nil {
@@ -97,6 +106,9 @@ func handleLifecycle(request []byte) ([]byte, error) {
 				return ErrorEnvelope("invalid_config", err.Error()), nil
 			}
 		}
+	}
+	if startupSync {
+		RunStartupSync()
 	}
 	return okEnvelope(registration())
 }

@@ -56,7 +56,6 @@ type versionCacheEntry struct {
 var (
 	versionMu       sync.RWMutex
 	versionCache    = map[string]versionCacheEntry{}
-	updaterOnce     sync.Once
 	diskLoadedOnce  sync.Once
 	customCachePath string // for testing override
 )
@@ -223,12 +222,19 @@ func compareVersions(a, b string) int {
 
 // refreshVersionInBackground fetches the latest version without blocking callers.
 func refreshVersionInBackground(targetKey string) {
+	refreshVersionCtx(context.Background(), targetKey)
+}
+
+// refreshVersionCtx is refreshVersionInBackground with a caller deadline (the
+// startup sync shares one budget across all probes). Returns true when a new
+// plausible version was stored.
+func refreshVersionCtx(ctx context.Context, targetKey string) bool {
 	versionMu.Lock()
 	entry, exists := versionCache[targetKey]
 	if exists && time.Since(entry.FetchedAt) < 10*time.Minute {
 		// Avoid stampeding fetches within 10 minutes on network failure
 		versionMu.Unlock()
-		return
+		return false
 	}
 	// Mark attempt time
 	versionCache[targetKey] = versionCacheEntry{
@@ -242,16 +248,16 @@ func refreshVersionInBackground(targetKey string) {
 
 	switch targetKey {
 	case targetKeyCLI:
-		ver, err = fetchLatestNpmVersion("cline")
+		ver, err = fetchLatestNpmVersionCtx(ctx, "cline")
 	case targetKeyCore:
-		ver, err = fetchLatestNpmVersion("@cline/core")
+		ver, err = fetchLatestNpmVersionCtx(ctx, "@cline/core")
 	case targetKeyDesktop:
 		// Desktop app version comes only from GitHub desktop-v* tags. There is
 		// deliberately no npm fallback (@cline/core is a different version line);
 		// on failure the cache/fallback keeps serving.
-		ver, err = fetchLatestDesktopReleaseVersion()
+		ver, err = fetchLatestDesktopReleaseVersionCtx(ctx)
 	default:
-		return
+		return false
 	}
 
 	if err == nil && isPlausibleVersion(ver) {
@@ -262,7 +268,9 @@ func refreshVersionInBackground(targetKey string) {
 		}
 		versionMu.Unlock()
 		saveVersionSnapshotToDisk()
+		return true
 	}
+	return false
 }
 
 func versionProbeEndpoints() (github, npm string) {
@@ -272,7 +280,11 @@ func versionProbeEndpoints() (github, npm string) {
 }
 
 func fetchLatestDesktopReleaseVersion() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), versionHTTPTimeout)
+	return fetchLatestDesktopReleaseVersionCtx(context.Background())
+}
+
+func fetchLatestDesktopReleaseVersionCtx(parent context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, versionHTTPTimeout)
 	defer cancel()
 
 	githubURL, _ := versionProbeEndpoints()
@@ -318,9 +330,13 @@ func fetchLatestDesktopReleaseVersion() (string, error) {
 }
 
 func fetchLatestNpmVersion(pkgName string) (string, error) {
+	return fetchLatestNpmVersionCtx(context.Background(), pkgName)
+}
+
+func fetchLatestNpmVersionCtx(parent context.Context, pkgName string) (string, error) {
 	_, npmBase := versionProbeEndpoints()
 	url := fmt.Sprintf("%s/%s", npmBase, pkgName)
-	ctx, cancel := context.WithTimeout(context.Background(), versionHTTPTimeout)
+	ctx, cancel := context.WithTimeout(parent, versionHTTPTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -353,16 +369,4 @@ func fetchLatestNpmVersion(pkgName string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(meta.DistTags.Latest), nil
-}
-
-// StartVersionUpdater warms up the version cache on startup.
-func StartVersionUpdater() {
-	diskLoadedOnce.Do(loadVersionSnapshotFromDisk)
-	updaterOnce.Do(func() {
-		go func() {
-			refreshVersionInBackground(targetKeyDesktop)
-			refreshVersionInBackground(targetKeyCLI)
-			refreshVersionInBackground(targetKeyCore)
-		}()
-	})
 }

@@ -37,6 +37,9 @@ func TestMain(m *testing.M) {
 	npmRegistryBaseURL = "http://127.0.0.1:1"
 	// No background probes: tests call refreshVersionInBackground directly.
 	scheduleVersionRefresh = func(string) {}
+	// plugin.register runs the startup sync; tests that go through it must not
+	// reach the public API. Tests of the sync itself reset this Once.
+	startupSyncOnce.Do(func() {})
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
