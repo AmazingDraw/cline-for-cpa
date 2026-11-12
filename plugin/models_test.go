@@ -21,7 +21,7 @@ func TestNormalizeModelKeepsFreeNamespace(t *testing.T) {
 		// the first namespace seen wins; inner ones are peeled as noise
 		"cline-free/cline-pass/kimi-k3": {"cline-free/kimi-k3", "cline-free/kimi-k3"},
 		// vendor prefix in front of a model we publish is dropped
-		"deepseek/deepseek-v4.1-flash": {"cline-pass/deepseek-v4.1-flash", "cline-pass/deepseek-v4.1-flash"},
+		"deepseek/deepseek-v4.1-flash-1017": {"cline-pass/deepseek-v4.1-flash-1017", "cline-pass/deepseek-v4.1-flash-1017"},
 		// unknown leaves still pass through, in their namespace
 		"cline-free/whatever-v9": {"cline-free/whatever-v9", "cline-free/whatever-v9"},
 	}
@@ -56,12 +56,11 @@ func TestExposedModelsTiers(t *testing.T) {
 			t.Fatalf("unexpected namespace in advertised list: %s", id)
 		}
 	}
-	// Floor tracks the live feed: 2026-10-21 upstream dropped mimo-v2.5 and
-	// mimo-v2.5-pro (13 clinePass rows minus the 3 blacklisted).
-	// 2026-10-24: upstream added kimi-k3.1-pro and moved minimax-m3.1-flash to
-	// clinePass (15 clinePass rows minus the 3 blacklisted = 12).
-	if len(pass) < 10 {
-		t.Fatalf("clinePass models advertised = %d, want at least 10 (15 minus the 3 blacklisted)", len(pass))
+	// Floor tracks the live feed: 2026-11-13 upstream dropped mimo-v2.6-*
+	// and deepseek-v4.1-flash (kept flash-1017); 9 clinePass rows minus
+	// qwen3.8-max blacklisted = 8 advertised.
+	if len(pass) < 8 {
+		t.Fatalf("clinePass models advertised = %d, want at least 8", len(pass))
 	}
 	// Floor tracks the live feed, not a historical peak. 2026-10-14 refresh
 	// swapped step-5-preview for nemotron-3.5-super-vl (2026-10-16).
@@ -85,11 +84,9 @@ func TestExposedModelsTiers(t *testing.T) {
 	for _, banned := range []string{
 		"cline-cloud/deepseek-v4.1-flash",
 		"openai/gpt-6-astra",
-		"spacexai/grok-4.7",
+		"meta/muse-ember",
 		// free tier in a vendor namespace: no route yet, so not advertised
-		"reflection/beam-free",
 		"nvidia/nemotron-3.5-lightning-free",
-		"poolside/laguna-s-2.1-free",
 	} {
 		if _, ok := lookupModel(banned); ok {
 			t.Fatalf("%s belongs to an unserved tier and must not be advertised", banned)
@@ -101,9 +98,9 @@ func TestExposedModelsTiers(t *testing.T) {
 		"cline-free/solar-mini4",
 		"cline-pass/minimax-m3.1-flash",
 		"cline-pass/kimi-k3.1-pro",
-		"cline-pass/mimo-v2.6-pro",
 		"cline-pass/glm-5.3",
-		"cline-pass/deepseek-v4.1-flash",
+		"cline-pass/deepseek-v4.1-flash-1017",
+		"cline-pass/deepseek-v4-pro",
 	} {
 		if _, ok := lookupModel(want); !ok {
 			t.Fatalf("missing advertised model %s", want)

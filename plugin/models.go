@@ -56,9 +56,9 @@ var excludedModels = []string{
 // what is actually exposed, so this list deliberately stays small and stable
 // rather than tracking every new release.
 var fallbackPassLeaves = []string{
-	"deepseek-v4.1-flash",
-	"mimo-v2.6-flash",
-	"mimo-v2.6-pro",
+	"deepseek-v4.1-flash-1017",
+	"deepseek-v4-pro",
+	"glm-5.3",
 	"kimi-k3",
 }
 

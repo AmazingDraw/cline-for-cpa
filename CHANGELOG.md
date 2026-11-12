@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.21 — 2026-11-13
+
+`modelmeta` 刷新（27→19 行）：`cline-pass/` 去掉 `deepseek-v4.1-flash`、`mimo-v2.6-flash`、`mimo-v2.6-pro`、`qwen3.7-max`、`qwen3.7-plus`、`minimax-m3`；`deepseek-v4.1-flash-1017` 仍在。推荐层 `reflection/beam-free`、`poolside/laguna-s-2.1-free` 换成 `meta/muse-ember`。免费池仍是 `nemotron-3.5-super-vl`、`solar-mini4`。`cline-cloud/` 仍不广告。
+
+客户端身份无变化：Desktop `0.0.49`，CLI `3.0.74`，Core `0.2.0`，与 live 一致。
+
 ## 0.4.20 — 2026-10-29
 
 **重启后模型列表立即是新的**：此前 `plugin.register` 读的是磁盘缓存，刷新在随后的后台协程里，宿主又没有重新注册接口，所以宿主拿到的永远是上一次的缓存（缓存 TTL 12h + 6h 定时器，实际 12–18h 才刷一次）。现在改为：
