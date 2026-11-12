@@ -39,12 +39,25 @@ type Model struct {
 // cline-cloud/ stays in modelmeta (upstream feed) but is not served.
 var servedNamespaces = []string{namespacePass, namespaceFree, namespaceStealth}
 
-// excludedModels is the blacklist. Everything in a served namespace is exposed
-// by default. (Removed solar-pro4 since it was never in the official free tier).
-var excludedModels = []string{
-	"cline-pass/qwen3.8-max",
-	"cline-pass/qwen3.7-max",
-	"cline-pass/qwen3.7-plus",
+// excludedModels is the exact-id / exact-leaf blacklist. A namespaced entry
+// hides only that id; a bare leaf hides the leaf in every namespace.
+var excludedModels []string
+
+// excludedLeafPrefixes hides every leaf that starts with one of these strings
+// (ASCII, case-insensitive), in every namespace. New qwen* / minimax* rows
+// from a catalog refresh stay hidden without another code change.
+var excludedLeafPrefixes = []string{
+	"qwen",
+	"minimax",
+}
+
+// servedVendorAliases maps a feed id that is not in a served namespace onto a
+// client-facing served id. Chat still sends the feed id upstream. Added only
+// after a live probe: nvidia/nemotron-3.5-lightning-free streams with cost 0
+// (non-stream returns 500 empty content because the model emits reasoning
+// first). The paid catalog id nvidia/nemotron-3.5-lightning is not aliased.
+var servedVendorAliases = map[string]string{
+	"nvidia/nemotron-3.5-lightning-free": "cline-free/nemotron-3.5-lightning",
 }
 
 // fallbackPassLeaves keeps the plugin functional when the generated catalog is
@@ -126,6 +139,21 @@ func exposedModels() []Model {
 			models = append(models, Model{ID: id, Upstream: id, Meta: generatedCatalog[id]})
 		}
 	}
+
+	for src, dest := range servedVendorAliases {
+		if seen[dest] || isExcludedModel(dest) || !isServedNamespace(dest) {
+			continue
+		}
+		meta, ok := activeCatalog[src]
+		if !ok {
+			meta, ok = generatedCatalog[src]
+		}
+		if !ok {
+			continue
+		}
+		seen[dest] = true
+		models = append(models, Model{ID: dest, Upstream: src, Meta: meta})
+	}
 	return models
 }
 
@@ -166,6 +194,13 @@ func isServedNamespace(id string) bool {
 
 func isExcludedModel(id string) bool {
 	leaf := leafOfModel(id)
+	lower := strings.ToLower(leaf)
+	for _, prefix := range excludedLeafPrefixes {
+		prefix = strings.ToLower(strings.TrimSpace(prefix))
+		if prefix != "" && strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
 	for _, entry := range excludedModels {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {

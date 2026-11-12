@@ -11,9 +11,10 @@ import (
 // hide the free window behind the plan's window).
 func TestNormalizeModelKeepsFreeNamespace(t *testing.T) {
 	cases := map[string][2]string{
-		"cline-free/deepseek-v4.1-flash":   {"cline-free/deepseek-v4.1-flash", "cline-free/deepseek-v4.1-flash"},
-		"cline-free/solar-mini4":           {"cline-free/solar-mini4", "cline-free/solar-mini4"},
-		"cline-free/nemotron-3.5-super-vl": {"cline-free/nemotron-3.5-super-vl", "cline-free/nemotron-3.5-super-vl"},
+		"cline-free/deepseek-v4.1-flash":    {"cline-free/deepseek-v4.1-flash", "cline-free/deepseek-v4.1-flash"},
+		"cline-free/solar-mini4":            {"cline-free/solar-mini4", "cline-free/solar-mini4"},
+		"cline-free/nemotron-3.5-super-vl":  {"cline-free/nemotron-3.5-super-vl", "cline-free/nemotron-3.5-super-vl"},
+		"cline-free/nemotron-3.5-lightning": {"cline-free/nemotron-3.5-lightning", "nvidia/nemotron-3.5-lightning-free"},
 		// bare ids keep the historical default
 		"deepseek-v4.1-flash":           {"cline-pass/deepseek-v4.1-flash", "cline-pass/deepseek-v4.1-flash"},
 		"cline-pass/kimi-k3":            {"cline-pass/kimi-k3", "cline-pass/kimi-k3"},
@@ -56,25 +57,25 @@ func TestExposedModelsTiers(t *testing.T) {
 			t.Fatalf("unexpected namespace in advertised list: %s", id)
 		}
 	}
-	// Floor tracks the live feed: 2026-11-13 upstream dropped mimo-v2.6-*
-	// and deepseek-v4.1-flash (kept flash-1017); 9 clinePass rows minus
-	// qwen3.8-max blacklisted = 8 advertised.
-	if len(pass) < 8 {
-		t.Fatalf("clinePass models advertised = %d, want at least 8", len(pass))
+	// Floor tracks the live feed: 9 clinePass rows minus qwen* and minimax*
+	// leaf prefixes = 7 advertised.
+	if len(pass) < 7 {
+		t.Fatalf("clinePass models advertised = %d, want at least 7", len(pass))
 	}
 	// Floor tracks the live feed, not a historical peak. 2026-10-14 refresh
 	// swapped step-5-preview for nemotron-3.5-super-vl (2026-10-16).
 	// 2026-10-21: mimo-v2.6-flash / muse-spark left cline-free/; the three new
 	// vendor/*-free ids are not served (no route), leaving 3.
 	// 2026-10-24: minimax-m3.1-flash promoted to clinePass, leaving 2 in cline-free.
-	if len(free)+len(stealth) < 2 {
-		t.Fatalf("free/stealth models advertised = %d, want at least 2", len(free)+len(stealth))
+	if len(free)+len(stealth) < 3 {
+		t.Fatalf("free/stealth models advertised = %d, want at least 3", len(free)+len(stealth))
 	}
-	// The blacklist is honoured (matched on the full id here)…
+	// Prefix blacklist: every qwen* / minimax* leaf is hidden.
 	for _, banned := range []string{
 		"cline-pass/qwen3.8-max",
 		"cline-pass/qwen3.7-max",
 		"cline-pass/qwen3.7-plus",
+		"cline-pass/minimax-m3.1-flash",
 	} {
 		if _, ok := lookupModel(banned); ok {
 			t.Fatalf("%s is blacklisted but still advertised", banned)
@@ -96,7 +97,7 @@ func TestExposedModelsTiers(t *testing.T) {
 	for _, want := range []string{
 		"cline-free/nemotron-3.5-super-vl",
 		"cline-free/solar-mini4",
-		"cline-pass/minimax-m3.1-flash",
+		"cline-free/nemotron-3.5-lightning",
 		"cline-pass/kimi-k3.1-pro",
 		"cline-pass/glm-5.3",
 		"cline-pass/deepseek-v4.1-flash-1017",
@@ -108,27 +109,67 @@ func TestExposedModelsTiers(t *testing.T) {
 	}
 }
 
-// Blacklist entry semantics: a namespaced entry hides exactly that id, a bare
-// leaf hides the leaf everywhere.
-func TestExcludedModelsSemantics(t *testing.T) {
-	if !isExcludedModel("cline-pass/qwen3.7-max") {
-		t.Fatal("full id must match")
+func TestExcludedLeafPrefixes(t *testing.T) {
+	for _, id := range []string{
+		"cline-pass/qwen3.8-max",
+		"cline-free/qwen3.7-max",
+		"cline-pass/Qwen3.9-preview",
+		"cline-pass/minimax-m3.1-flash",
+		"minimax-m3",
+	} {
+		if !isExcludedModel(id) {
+			t.Fatalf("%s must match qwen/minimax leaf prefix", id)
+		}
 	}
-	if isExcludedModel("cline-free/qwen3.7-max") {
-		t.Fatal("a namespaced entry must not leak into another namespace")
+	for _, id := range []string{
+		"cline-pass/kimi-k3",
+		"cline-pass/glm-5.3",
+		"cline-free/nemotron-3.5-super-vl",
+	} {
+		if isExcludedModel(id) {
+			t.Fatalf("%s must not match qwen/minimax prefix", id)
+		}
 	}
-	if isExcludedModel("cline-pass/kimi-k3") {
-		t.Fatal("unrelated model must not be excluded")
-	}
+}
 
+// Exact-id / exact-leaf entries still hide only what they name.
+func TestExcludedModelsSemantics(t *testing.T) {
 	saved := excludedModels
 	defer func() { excludedModels = saved }()
+	excludedModels = []string{"cline-pass/glm-5.3"}
+	if !isExcludedModel("cline-pass/glm-5.3") {
+		t.Fatal("full id must match")
+	}
+	if isExcludedModel("cline-free/glm-5.3") {
+		t.Fatal("a namespaced entry must not leak into another namespace")
+	}
+
 	excludedModels = []string{"kimi-k3"}
 	if !isExcludedModel("cline-pass/kimi-k3") || !isExcludedModel("cline-free/kimi-k3") {
 		t.Fatal("a bare leaf must match in any namespace")
 	}
 	if isExcludedModel("cline-pass/mimo-v2.6-pro") {
 		t.Fatal("a bare leaf must not match a different model")
+	}
+}
+
+func TestLightningVendorAlias(t *testing.T) {
+	m, ok := lookupModel("cline-free/nemotron-3.5-lightning")
+	if !ok {
+		t.Fatal("missing advertised alias cline-free/nemotron-3.5-lightning")
+	}
+	if m.Upstream != "nvidia/nemotron-3.5-lightning-free" {
+		t.Fatalf("upstream = %q", m.Upstream)
+	}
+	if _, advertised := lookupModel("nvidia/nemotron-3.5-lightning-free"); advertised {
+		t.Fatal("raw vendor id must not be advertised")
+	}
+	client, up, err := NormalizeModel("cline-free/nemotron-3.5-lightning")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client != "cline-free/nemotron-3.5-lightning" || up != "nvidia/nemotron-3.5-lightning-free" {
+		t.Fatalf("client=%q upstream=%q", client, up)
 	}
 }
 

@@ -2,6 +2,12 @@
 
 改代码必升号。机制长文在 [docs/](docs/)，现行用法 [README](README.md)。
 
+## 0.4.22 — 2026-11-13
+
+黑名单改成 **leaf 前缀**：`qwen`、`minimax`（大小写不敏感）。`qwen3.8-max` / `qwen3.7-*` 以及现在的 `minimax-m3.1-flash` 都藏；以后 feed 再出 `qwen*` / `minimax*` 不用再逐条加。
+
+放出 `cline-free/nemotron-3.5-lightning`（上游 `nvidia/nemotron-3.5-lightning-free`）。实测：非流式 500 空 body；流式 200、`cost=0`，内容走 `delta.reasoning`。不要用去掉 `-free` 的 `nvidia/nemotron-3.5-lightning`，那是计费目录（`cost>0`）。
+
 ## 0.4.21 — 2026-11-13
 
 `modelmeta` 刷新（27→19 行）：`cline-pass/` 去掉 `deepseek-v4.1-flash`、`mimo-v2.6-flash`、`mimo-v2.6-pro`、`qwen3.7-max`、`qwen3.7-plus`、`minimax-m3`；`deepseek-v4.1-flash-1017` 仍在。推荐层 `reflection/beam-free`、`poolside/laguna-s-2.1-free` 换成 `meta/muse-ember`。免费池仍是 `nemotron-3.5-super-vl`、`solar-mini4`。`cline-cloud/` 仍不广告。
